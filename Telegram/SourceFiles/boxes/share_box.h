@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
+#include "ui/layers/box_content.h"
 #include "base/timer.h"
 #include "history/view/history_view_schedule_box.h"
 #include "ui/chat/forward_options_box.h"
@@ -69,6 +69,10 @@ void FastShareMessage(
 	not_null<Window::SessionController*> controller,
 	not_null<HistoryItem*> item);
 
+struct RecipientPremiumRequiredError;
+[[nodiscard]] auto SharePremiumRequiredError()
+-> Fn<RecipientPremiumRequiredError(not_null<UserData*>)>;
+
 class ShareBox final : public Ui::BoxContent {
 public:
 	using CopyCallback = Fn<void()>;
@@ -97,11 +101,14 @@ public:
 		const style::InputField *stLabel = nullptr;
 		rpl::producer<QString> title;
 		struct {
-			int messagesCount = 0;
+			int sendersCount = 0;
+			int captionsCount = 0;
 			bool show = false;
-			bool hasCaptions = false;
 		} forwardOptions;
 		HistoryView::ScheduleBoxStyleArgs scheduleBoxStyle;
+
+		using PremiumRequiredError = RecipientPremiumRequiredError;
+		Fn<PremiumRequiredError(not_null<UserData*>)> premiumRequiredError;
 	};
 	ShareBox(QWidget*, Descriptor &&descriptor);
 

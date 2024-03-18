@@ -7,10 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/statistics/info_statistics_widget.h"
 
-#include "info/statistics/info_statistics_inner_widget.h"
+#include "data/data_session.h"
+#include "data/data_stories.h"
 #include "info/info_controller.h"
 #include "info/info_memento.h"
+#include "info/statistics/info_statistics_inner_widget.h"
 #include "lang/lang_keys.h"
+#include "main/main_session.h"
 
 namespace Info::Statistics {
 
@@ -18,11 +21,16 @@ Memento::Memento(not_null<Controller*> controller)
 : ContentMemento(Tag{
 	controller->statisticsPeer(),
 	controller->statisticsContextId(),
+	controller->statisticsStoryId(),
 }) {
 }
 
 Memento::Memento(not_null<PeerData*> peer, FullMsgId contextId)
-: ContentMemento(Tag{ peer, contextId }) {
+: ContentMemento(Tag{ peer, contextId, {} }) {
+}
+
+Memento::Memento(not_null<PeerData*> peer, FullStoryId storyId)
+: ContentMemento(Tag{ peer, {}, storyId }) {
 }
 
 Memento::~Memento() = default;
@@ -57,7 +65,8 @@ Widget::Widget(
 		this,
 		controller,
 		controller->statisticsPeer(),
-		controller->statisticsContextId()))) {
+		controller->statisticsContextId(),
+		controller->statisticsStoryId()))) {
 	_inner->showRequests(
 	) | rpl::start_with_next([=](InnerWidget::ShowRequest request) {
 		if (request.history) {
@@ -67,10 +76,18 @@ Widget::Widget(
 				request.history.msg);
 		} else if (request.info) {
 			controller->showPeerInfo(request.info);
-		} else if (request.messageStatistic) {
+		} else if (request.messageStatistic || request.storyStatistic) {
 			controller->showSection(Make(
 				controller->statisticsPeer(),
-				request.messageStatistic));
+				request.messageStatistic,
+				request.storyStatistic));
+		} else if (const auto &s = request.story) {
+			if (const auto peer = controller->session().data().peer(s.peer)) {
+				controller->parentController()->openPeerStory(
+					peer,
+					s.story,
+					{ Data::StoriesContextSingle() });
+			}
 		}
 	}, _inner->lifetime());
 	_inner->scrollToRequests(
@@ -79,21 +96,15 @@ Widget::Widget(
 	}, _inner->lifetime());
 }
 
-not_null<PeerData*> Widget::peer() const {
-	return _inner->peer();
-}
-
-FullMsgId Widget::contextId() const {
-	return _inner->contextId();
-}
-
 bool Widget::showInternal(not_null<ContentMemento*> memento) {
 	return false;
 }
 
 rpl::producer<QString> Widget::title() {
-	return _inner->contextId()
+	return controller()->statisticsContextId()
 		? tr::lng_stats_message_title()
+		: controller()->statisticsStoryId()
+		? tr::lng_stats_story_title()
 		: tr::lng_stats_title();
 }
 
@@ -131,11 +142,13 @@ void Widget::restoreState(not_null<Memento*> memento) {
 
 std::shared_ptr<Info::Memento> Make(
 		not_null<PeerData*> peer,
-		FullMsgId contextId) {
+		FullMsgId contextId,
+		FullStoryId storyId) {
+	const auto memento = storyId
+		? std::make_shared<Memento>(peer, storyId)
+		: std::make_shared<Memento>(peer, contextId);
 	return std::make_shared<Info::Memento>(
-		std::vector<std::shared_ptr<ContentMemento>>(
-			1,
-			std::make_shared<Memento>(peer, contextId)));
+		std::vector<std::shared_ptr<ContentMemento>>(1, std::move(memento)));
 }
 
 } // namespace Info::Statistics

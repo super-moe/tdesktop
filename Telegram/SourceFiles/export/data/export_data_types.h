@@ -197,7 +197,7 @@ struct Poll {
 	bool closed = false;
 };
 
-struct Giveaway {
+struct GiveawayStart {
 	std::vector<ChannelId> channels;
 	TimeId untilDate = 0;
 	int quantity = 0;
@@ -336,7 +336,7 @@ struct Media {
 		Game,
 		Invoice,
 		Poll,
-		Giveaway,
+		GiveawayStart,
 		UnsupportedMedia> content;
 	TimeId ttl = 0;
 
@@ -533,10 +533,9 @@ struct ActionSuggestProfilePhoto {
 };
 
 struct ActionSetChatWallPaper {
+	bool same = false;
+	bool both = false;
 	// #TODO wallpapers
-};
-
-struct ActionSetSameChatWallPaper {
 };
 
 struct ActionGiftCode {
@@ -548,11 +547,20 @@ struct ActionGiftCode {
 };
 
 struct ActionRequestedPeer {
-	PeerId peerId = 0;
+	std::vector<PeerId> peers;
 	int buttonId = 0;
 };
 
 struct ActionGiveawayLaunch {
+};
+
+struct ActionGiveawayResults {
+	int winners = 0;
+	int unclaimed = 0;
+};
+
+struct ActionBoostApply {
+	int boosts = 0;
 };
 
 struct ServiceAction {
@@ -593,9 +601,10 @@ struct ServiceAction {
 		ActionSuggestProfilePhoto,
 		ActionRequestedPeer,
 		ActionSetChatWallPaper,
-		ActionSetSameChatWallPaper,
 		ActionGiftCode,
-		ActionGiveawayLaunch> content;
+		ActionGiveawayLaunch,
+		ActionGiveawayResults,
+		ActionBoostApply> content;
 };
 
 ServiceAction ParseServiceAction(
@@ -661,6 +670,35 @@ inline bool operator>=(MessageId a, MessageId b) {
 	return !(a < b);
 }
 
+struct HistoryMessageMarkupButton {
+	enum class Type {
+		Default,
+		Url,
+		Callback,
+		CallbackWithPassword,
+		RequestPhone,
+		RequestLocation,
+		RequestPoll,
+		RequestPeer,
+		SwitchInline,
+		SwitchInlineSame,
+		Game,
+		Buy,
+		Auth,
+		UserProfile,
+		WebView,
+		SimpleWebView,
+	};
+
+	static QByteArray TypeToString(const HistoryMessageMarkupButton &);
+
+	Type type;
+	QString text;
+	QByteArray data;
+	QString forwardText;
+	int64 buttonId = 0;
+};
+
 struct Message {
 	int32 id = 0;
 	TimeId date = 0;
@@ -683,6 +721,7 @@ struct Message {
 	int64 media_group_id;
 	ServiceAction action;
 	bool out = false;
+	std::vector<std::vector<HistoryMessageMarkupButton>> inlineButtonRows;
 
 	File &file();
 	const File &file() const;

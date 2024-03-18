@@ -7,18 +7,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/core_settings.h"
 
-#include "boxes/send_files_box.h"
-#include "history/view/history_view_quick_action.h"
-#include "ui/widgets/fields/input_field.h"
-#include "storage/serialize_common.h"
-#include "window/section_widget.h"
 #include "base/platform/base_platform_info.h"
-#include "webrtc/webrtc_create_adm.h"
-#include "media/player/media_player_instance.h"
-#include "media/media_common.h"
-#include "ui/gl/gl_detection.h"
 #include "calls/group/calls_group_common.h"
+#include "history/view/history_view_quick_action.h"
+#include "lang/lang_keys.h"
+#include "platform/platform_notifications_manager.h"
 #include "spellcheck/spellcheck_types.h"
+#include "storage/serialize_common.h"
+#include "ui/gl/gl_detection.h"
+#include "ui/widgets/fields/input_field.h"
+#include "webrtc/webrtc_create_adm.h"
+#include "webrtc/webrtc_device_common.h"
+#include "window/section_widget.h"
 
 namespace Core {
 namespace {
@@ -160,8 +160,8 @@ QByteArray Settings::serialize() const {
 		+ Serialize::stringSize(_downloadPath.current())
 		+ Serialize::bytearraySize(_downloadPathBookmark)
 		+ sizeof(qint32) * 9
-		+ Serialize::stringSize(_callOutputDeviceId)
-		+ Serialize::stringSize(_callInputDeviceId)
+		+ Serialize::stringSize(QString()) // legacy call output device id
+		+ Serialize::stringSize(QString()) // legacy call input device id
 		+ sizeof(qint32) * 5;
 	for (const auto &[key, value] : _soundOverrides) {
 		size += Serialize::stringSize(key) + Serialize::stringSize(value);
@@ -171,7 +171,7 @@ QByteArray Settings::serialize() const {
 		+ sizeof(qint32)
 		+ (_dictionariesEnabled.current().size() * sizeof(quint64))
 		+ sizeof(qint32) * 12
-		+ Serialize::stringSize(_callVideoInputDeviceId)
+		+ Serialize::stringSize(_cameraDeviceId.current())
 		+ sizeof(qint32) * 2
 		+ Serialize::bytearraySize(_groupCallPushToTalkShortcut)
 		+ sizeof(qint64)
@@ -195,7 +195,7 @@ QByteArray Settings::serialize() const {
 		+ (_accountsOrder.size() * sizeof(quint64))
 		+ sizeof(qint32) * 7
 		+ (skipLanguages.size() * sizeof(quint64))
-		+ sizeof(qint32)
+		+ sizeof(qint32) * 2
 		+ sizeof(quint64)
 		+ sizeof(qint32) * 3
 		+ Serialize::bytearraySize(mediaViewPosition)
@@ -205,6 +205,11 @@ QByteArray Settings::serialize() const {
 	for (const auto &id : _recentEmojiSkip) {
 		size += Serialize::stringSize(id);
 	}
+	size += sizeof(qint32) * 2
+		+ Serialize::stringSize(_playbackDeviceId.current())
+		+ Serialize::stringSize(_captureDeviceId.current())
+		+ Serialize::stringSize(_callPlaybackDeviceId.current())
+		+ Serialize::stringSize(_callCaptureDeviceId.current());
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -229,8 +234,8 @@ QByteArray Settings::serialize() const {
 			<< qint32(_notificationsCount)
 			<< static_cast<qint32>(_notificationsCorner)
 			<< qint32(_autoLock)
-			<< _callOutputDeviceId
-			<< _callInputDeviceId
+			<< QString() // legacy call output device id
+			<< QString() // legacy call input device id
 			<< qint32(_callOutputVolume)
 			<< qint32(_callInputVolume)
 			<< qint32(_callAudioDuckingEnabled ? 1 : 0)
@@ -274,7 +279,7 @@ QByteArray Settings::serialize() const {
 			<< qint32(_notifyFromAll ? 1 : 0)
 			<< qint32(_nativeWindowFrame.current() ? 1 : 0)
 			<< qint32(_systemDarkModeEnabled.current() ? 1 : 0)
-			<< _callVideoInputDeviceId
+			<< _cameraDeviceId.current()
 			<< qint32(_ipRevealWarning ? 1 : 0)
 			<< qint32(_groupCallPushToTalk ? 1 : 0)
 			<< _groupCallPushToTalkShortcut
@@ -328,9 +333,7 @@ QByteArray Settings::serialize() const {
 		}
 
 		stream
-			<< qint32(_rememberedDeleteMessageOnlyForYou ? 1 : 0);
-
-		stream
+			<< qint32(_rememberedDeleteMessageOnlyForYou ? 1 : 0)
 			<< qint32(_translateChatEnabled.current() ? 1 : 0)
 			<< quint64(QLocale::Language(_translateToRaw.current()))
 			<< qint32(_windowTitleContent.current().hideChatName ? 1 : 0)
@@ -345,8 +348,15 @@ QByteArray Settings::serialize() const {
 			stream << id;
 		}
 		stream
-			<< qint32(_trayIconMonochrome.current() ? 1 : 0);
+			<< qint32(_trayIconMonochrome.current() ? 1 : 0)
+			<< qint32(_ttlVoiceClickTooltipHidden.current() ? 1 : 0)
+			<< _playbackDeviceId.current()
+			<< _captureDeviceId.current()
+			<< _callPlaybackDeviceId.current()
+			<< _callCaptureDeviceId.current();
 	}
+
+	Ensures(result.size() == size);
 	return result;
 }
 
@@ -375,9 +385,13 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	qint32 notificationsCount = _notificationsCount;
 	qint32 notificationsCorner = static_cast<qint32>(_notificationsCorner);
 	qint32 autoLock = _autoLock;
-	QString callOutputDeviceId = _callOutputDeviceId;
-	QString callInputDeviceId = _callInputDeviceId;
-	QString callVideoInputDeviceId = _callVideoInputDeviceId;
+	QString playbackDeviceId = _playbackDeviceId.current();
+	QString captureDeviceId = _captureDeviceId.current();
+	QString cameraDeviceId = _cameraDeviceId.current();
+	QString legacyCallPlaybackDeviceId = _callPlaybackDeviceId.current();
+	QString legacyCallCaptureDeviceId = _callCaptureDeviceId.current();
+	QString callPlaybackDeviceId = _callPlaybackDeviceId.current();
+	QString callCaptureDeviceId = _callCaptureDeviceId.current();
 	qint32 callOutputVolume = _callOutputVolume;
 	qint32 callInputVolume = _callInputVolume;
 	qint32 callAudioDuckingEnabled = _callAudioDuckingEnabled ? 1 : 0;
@@ -417,7 +431,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	qint32 groupCallPushToTalk = _groupCallPushToTalk ? 1 : 0;
 	QByteArray groupCallPushToTalkShortcut = _groupCallPushToTalkShortcut;
 	qint64 groupCallPushToTalkDelay = _groupCallPushToTalkDelay;
-	qint32 callAudioBackend = 0;
+	qint32 legacyCallAudioBackend = 0;
 	qint32 disableCallsLegacy = 0;
 	QByteArray windowPosition;
 	std::vector<RecentEmojiPreload> recentEmojiPreload;
@@ -454,6 +468,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	qint32 storiesClickTooltipHidden = _storiesClickTooltipHidden.current() ? 1 : 0;
 	base::flat_set<QString> recentEmojiSkip;
 	qint32 trayIconMonochrome = (_trayIconMonochrome.current() ? 1 : 0);
+	qint32 ttlVoiceClickTooltipHidden = _ttlVoiceClickTooltipHidden.current() ? 1 : 0;
 
 	stream >> themesAccentColors;
 	if (!stream.atEnd()) {
@@ -474,8 +489,8 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 			>> notificationsCount
 			>> notificationsCorner
 			>> autoLock
-			>> callOutputDeviceId
-			>> callInputDeviceId
+			>> legacyCallPlaybackDeviceId
+			>> legacyCallCaptureDeviceId
 			>> callOutputVolume
 			>> callInputVolume
 			>> callAudioDuckingEnabled
@@ -538,7 +553,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 		stream >> systemDarkModeEnabled;
 	}
 	if (!stream.atEnd()) {
-		stream >> callVideoInputDeviceId;
+		stream >> cameraDeviceId;
 	}
 	if (!stream.atEnd()) {
 		stream >> ipRevealWarning;
@@ -550,7 +565,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 			>> groupCallPushToTalkDelay;
 	}
 	if (!stream.atEnd()) {
-		stream >> callAudioBackend;
+		stream >> legacyCallAudioBackend;
 	}
 	if (!stream.atEnd()) {
 		stream >> disableCallsLegacy;
@@ -665,7 +680,8 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 				});
 			}
 		}
-
+	}
+	if (!stream.atEnd()) {
 		stream >> rememberedDeleteMessageOnlyForYou;
 	}
 	if (!stream.atEnd()) {
@@ -710,6 +726,27 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 		// Let existing clients use the old value.
 		trayIconMonochrome = 0;
 	}
+	if (!stream.atEnd()) {
+		stream >> ttlVoiceClickTooltipHidden;
+	}
+	if (!stream.atEnd()) {
+		stream
+			>> playbackDeviceId
+			>> captureDeviceId;
+	}
+	if (!stream.atEnd()) {
+		stream
+			>> callPlaybackDeviceId
+			>> callCaptureDeviceId;
+	} else {
+		const auto &defaultId = Webrtc::kDefaultDeviceId;
+		callPlaybackDeviceId = (legacyCallPlaybackDeviceId == defaultId)
+			? QString()
+			: legacyCallPlaybackDeviceId;
+		callCaptureDeviceId = (legacyCallCaptureDeviceId == defaultId)
+			? QString()
+			: legacyCallCaptureDeviceId;
+	}
 	if (stream.status() != QDataStream::Ok) {
 		LOG(("App Error: "
 			"Bad data for Core::Settings::constructFromSerialized()"));
@@ -753,9 +790,12 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	_countUnreadMessages = (countUnreadMessages == 1);
 	_notifyAboutPinned = (notifyAboutPinned == 1);
 	_autoLock = autoLock;
-	_callOutputDeviceId = callOutputDeviceId;
-	_callInputDeviceId = callInputDeviceId;
-	_callVideoInputDeviceId = callVideoInputDeviceId;
+	_playbackDeviceId = playbackDeviceId;
+	_captureDeviceId = captureDeviceId;
+	const auto kOldDefault = u"default"_q;
+	_cameraDeviceId = cameraDeviceId;
+	_callPlaybackDeviceId = callPlaybackDeviceId;
+	_callCaptureDeviceId = callCaptureDeviceId;
 	_callOutputVolume = callOutputVolume;
 	_callInputVolume = callInputVolume;
 	_callAudioDuckingEnabled = (callAudioDuckingEnabled == 1);
@@ -904,6 +944,7 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	_storiesClickTooltipHidden = (storiesClickTooltipHidden == 1);
 	_recentEmojiSkip = std::move(recentEmojiSkip);
 	_trayIconMonochrome = (trayIconMonochrome == 1);
+	_ttlVoiceClickTooltipHidden = (ttlVoiceClickTooltipHidden == 1);
 }
 
 QString Settings::getSoundPath(const QString &key) const {
@@ -948,10 +989,6 @@ void Settings::setTabbedReplacedWithInfo(bool enabled) {
 		_tabbedReplacedWithInfo = enabled;
 		_tabbedReplacedWithInfoValue.fire_copy(enabled);
 	}
-}
-
-Webrtc::Backend Settings::callAudioBackend() const {
-	return Webrtc::Backend::OpenAL;
 }
 
 void Settings::setDialogsWidthRatio(float64 ratio) {
@@ -1211,9 +1248,11 @@ void Settings::resetOnLastLogout() {
 	_notifyAboutPinned = true;
 	//_autoLock = 3600;
 
-	//_callOutputDeviceId = u"default"_q;
-	//_callInputDeviceId = u"default"_q;
-	//_callVideoInputDeviceId = u"default"_q;
+	//_playbackDeviceId = QString();
+	//_captureDeviceId = QString();
+	//_cameraDeviceId = QString();
+	//_callPlaybackDeviceId = QString();
+	//_callCaptureDeviceId = QString();
 	//_callOutputVolume = 100;
 	//_callInputVolume = 100;
 	//_callAudioDuckingEnabled = true;
@@ -1259,7 +1298,8 @@ void Settings::resetOnLastLogout() {
 	_tabbedReplacedWithInfo = false; // per-window
 	_systemDarkModeEnabled = false;
 	_hiddenGroupCallTooltips = 0;
-	_storiesClickTooltipHidden = 0;
+	_storiesClickTooltipHidden = false;
+	_ttlVoiceClickTooltipHidden = false;
 
 	_recentEmojiPreload.clear();
 	_recentEmoji.clear();
@@ -1304,6 +1344,17 @@ auto Settings::DeserializePlaybackSpeed(qint32 speed) -> PlaybackSpeed {
 		enabled = false;
 	}
 	return validate(std::clamp(speed / 100., kSpeedMin, kSpeedMax));
+}
+
+bool Settings::nativeNotifications() const {
+	return _nativeNotifications.value_or(
+		Platform::Notifications::ByDefault());
+}
+
+void Settings::setNativeNotifications(bool value) {
+	_nativeNotifications = (value == Platform::Notifications::ByDefault())
+		? std::nullopt
+		: std::make_optional(value);
 }
 
 void Settings::setTranslateButtonEnabled(bool value) {

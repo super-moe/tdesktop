@@ -165,6 +165,7 @@ public:
 	virtual ~PeerData();
 
 	static constexpr auto kServiceNotificationsId = peerFromUser(777000);
+	static constexpr auto kSavedHiddenAuthorId = peerFromUser(2666000);
 
 	[[nodiscard]] Data::Session &owner() const;
 	[[nodiscard]] Main::Session &session() const;
@@ -177,6 +178,10 @@ public:
 	bool clearColorIndex();
 	[[nodiscard]] DocumentId backgroundEmojiId() const;
 	bool changeBackgroundEmojiId(DocumentId id);
+
+	void setEmojiStatus(const MTPEmojiStatus &status);
+	void setEmojiStatus(DocumentId emojiStatusId, TimeId until = 0);
+	[[nodiscard]] DocumentId emojiStatusId() const;
 
 	[[nodiscard]] bool isUser() const {
 		return peerIsUser(id);
@@ -198,6 +203,7 @@ public:
 	[[nodiscard]] bool isGigagroup() const;
 	[[nodiscard]] bool isRepliesChat() const;
 	[[nodiscard]] bool sharedMediaInfo() const;
+	[[nodiscard]] bool savedSublistsInfo() const;
 	[[nodiscard]] bool hasStoriesHidden() const;
 	void setStoriesHidden(bool hidden);
 
@@ -207,6 +213,9 @@ public:
 	}
 	[[nodiscard]] bool isServiceUser() const {
 		return isUser() && !(id.value % 1000);
+	}
+	[[nodiscard]] bool isSavedHiddenAuthor() const {
+		return (id == kSavedHiddenAuthorId);
 	}
 
 	[[nodiscard]] Data::Forum *forum() const;
@@ -370,6 +379,7 @@ public:
 	bool changeColorIndex(const tl::conditional<MTPint> &cloudColorIndex);
 	bool changeBackgroundEmojiId(
 		const tl::conditional<MTPlong> &cloudBackgroundEmoji);
+	bool changeColor(const tl::conditional<MTPPeerColor> &cloudColor);
 
 	enum class BlockStatus : char {
 		Unknown,
@@ -413,7 +423,10 @@ public:
 	void setThemeEmoji(const QString &emoticon);
 	[[nodiscard]] const QString &themeEmoji() const;
 
-	void setWallPaper(std::optional<Data::WallPaper> paper);
+	void setWallPaper(
+		std::optional<Data::WallPaper> paper,
+		bool overriden = false);
+	[[nodiscard]] bool wallPaperOverriden() const;
 	[[nodiscard]] const Data::WallPaper *wallPaper() const;
 
 	enum class StoriesState {
@@ -462,11 +475,13 @@ private:
 	base::flat_set<QString> _nameWords; // for filtering
 	base::flat_set<QChar> _nameFirstLetters;
 
+	DocumentId _emojiStatusId = 0;
 	uint64 _backgroundEmojiId = 0;
 	crl::time _lastFullUpdate = 0;
 
 	QString _name;
-	int _nameVersion = 1;
+	uint32 _nameVersion : 31 = 1;
+	uint32 _wallPaperOverriden : 1 = 0;
 
 	TimeId _ttlPeriod = 0;
 
@@ -474,6 +489,7 @@ private:
 	TimeId _requestChatDate = 0;
 
 	Settings _settings = PeerSettings(PeerSetting::Unknown);
+
 	BlockStatus _blockStatus = BlockStatus::Unknown;
 	LoadedStatus _loadedStatus = LoadedStatus::Not;
 	TranslationFlag _translationFlag = TranslationFlag::Unknown;

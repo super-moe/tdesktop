@@ -126,9 +126,13 @@ private:
 struct HistoryMessageForwarded : public RuntimeComponent<HistoryMessageForwarded, HistoryItem> {
 	void create(const HistoryMessageVia *via) const;
 
+	[[nodiscard]] bool forwardOfForward() const {
+		return savedFromSender || savedFromHiddenSenderInfo;
+	}
+
 	TimeId originalDate = 0;
 	PeerData *originalSender = nullptr;
-	std::unique_ptr<HiddenSenderInfo> hiddenSenderInfo;
+	std::unique_ptr<HiddenSenderInfo> originalHiddenSenderInfo;
 	QString originalPostAuthor;
 	QString psaType;
 	MsgId originalId = 0;
@@ -136,24 +140,22 @@ struct HistoryMessageForwarded : public RuntimeComponent<HistoryMessageForwarded
 
 	PeerData *savedFromPeer = nullptr;
 	MsgId savedFromMsgId = 0;
+
+	PeerData *savedFromSender = nullptr;
+	std::unique_ptr<HiddenSenderInfo> savedFromHiddenSenderInfo;
+
+	bool savedFromOutgoing = false;
 	bool imported = false;
 	bool story = false;
 };
 
-struct HistoryMessageSponsored : public RuntimeComponent<HistoryMessageSponsored, HistoryItem> {
-	enum class Type : uchar {
-		User,
-		Group,
-		Broadcast,
-		Post,
-		Bot,
-		ExternalLink,
-	};
-	std::unique_ptr<HiddenSenderInfo> sender;
-	Type type = Type::User;
-	bool recommended = false;
-	bool isForceUserpicDisplay = false;
-	QString externalLink;
+struct HistoryMessageSavedMediaData : public RuntimeComponent<HistoryMessageSavedMediaData, HistoryItem> {
+	TextWithEntities text;
+	std::unique_ptr<Data::Media> media;
+};
+
+struct HistoryMessageSaved : public RuntimeComponent<HistoryMessageSaved, HistoryItem> {
+	Data::SavedSublist *sublist = nullptr;
 };
 
 class ReplyToMessagePointer final {
@@ -233,7 +235,7 @@ private:
 };
 
 struct ReplyFields {
-	ReplyFields clone(not_null<HistoryItem*> parent) const;
+	[[nodiscard]] ReplyFields clone(not_null<HistoryItem*> parent) const;
 
 	TextWithEntities quote;
 	std::unique_ptr<Data::Media> externalMedia;
@@ -244,8 +246,9 @@ struct ReplyFields {
 	MsgId messageId = 0;
 	MsgId topMessageId = 0;
 	StoryId storyId = 0;
-	bool topicPost = false;
-	bool manualQuote = false;
+	uint32 quoteOffset : 30 = 0;
+	uint32 manualQuote : 1 = 0;
+	uint32 topicPost : 1 = 0;
 };
 
 [[nodiscard]] ReplyFields ReplyFieldsFromMTP(
@@ -273,7 +276,7 @@ struct HistoryMessageReply
 		MsgId messageId,
 		MsgId topMessageId,
 		bool topicPost);
-	bool updateData(not_null<HistoryItem*> holder, bool force = false);
+	void updateData(not_null<HistoryItem*> holder, bool force = false);
 
 	// Must be called before destructor.
 	void clearData(not_null<HistoryItem*> holder);
@@ -319,6 +322,8 @@ struct HistoryMessageReply
 		return _multiline;
 	}
 
+	[[nodiscard]] bool acquireResolve();
+
 	void setTopMessageId(MsgId topMessageId);
 
 	void refreshReplyToMedia();
@@ -333,6 +338,8 @@ private:
 	uint8 _unavailable : 1 = 0;
 	uint8 _displaying : 1 = 0;
 	uint8 _multiline : 1 = 0;
+	uint8 _pendingResolve : 1 = 0;
+	uint8 _requestedResolve : 1 = 0;
 
 };
 
@@ -564,6 +571,8 @@ struct HistoryServiceDependentData {
 	MsgId msgId = 0;
 	MsgId topId = 0;
 	bool topicPost = false;
+	bool pendingResolve = false;
+	bool requestedResolve = false;
 };
 
 struct HistoryServicePinned
@@ -611,6 +620,11 @@ struct HistoryServicePayment
 
 struct HistoryServiceSameBackground
 : public RuntimeComponent<HistoryServiceSameBackground, HistoryItem>
+, public HistoryServiceDependentData {
+};
+
+struct HistoryServiceGiveawayResults
+: public RuntimeComponent<HistoryServiceGiveawayResults, HistoryItem>
 , public HistoryServiceDependentData {
 };
 

@@ -7,18 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/flags.h"
-#include "base/object_ptr.h"
-#include "base/weak_ptr.h"
 #include "base/timer.h"
 #include "boxes/gift_premium_box.h" // GiftPremiumValidator.
 #include "chat_helpers/compose/compose_show.h"
 #include "data/data_chat_participant_status.h"
 #include "dialogs/dialogs_key.h"
-#include "ui/layers/layer_widget.h"
 #include "settings/settings_type.h"
 #include "window/window_adaptive.h"
-#include "mtproto/sender.h"
 
 class PhotoData;
 class MainWidget;
@@ -93,16 +88,7 @@ class SectionMemento;
 class Controller;
 class FiltersMenu;
 
-enum class ResolveType {
-	Default,
-	BotApp,
-	BotStart,
-	AddToGroup,
-	AddToChannel,
-	ShareGame,
-	Mention,
-	Boost,
-};
+struct PeerByLinkInfo;
 
 struct PeerThemeOverride {
 	PeerData *peer = nullptr;
@@ -168,12 +154,15 @@ struct SectionShow {
 	}
 
 	TextWithEntities highlightPart;
+	int highlightPartOffsetHint = 0;
 	Way way = Way::Forward;
 	anim::type animated = anim::type::normal;
 	anim::activation activation = anim::activation::normal;
 	bool thirdColumn = false;
 	bool childColumn = false;
+	bool forbidLayer = false;
 	bool reapplyLocalDraft = false;
+	bool dropSameFromStack = false;
 	Origin origin;
 
 };
@@ -194,33 +183,6 @@ public:
 		const SectionShow &params = SectionShow()) = 0;
 	virtual not_null<SessionController*> parentController() = 0;
 
-	struct CommentId {
-		MsgId id = 0;
-	};
-	struct ThreadId {
-		MsgId id = 0;
-	};
-	using RepliesByLinkInfo = std::variant<v::null_t, CommentId, ThreadId>;
-	struct PeerByLinkInfo {
-		std::variant<QString, ChannelId> usernameOrId;
-		QString phone;
-		MsgId messageId = ShowAtUnreadMsgId;
-		StoryId storyId = 0;
-		RepliesByLinkInfo repliesInfo;
-		ResolveType resolveType = ResolveType::Default;
-		QString startToken;
-		ChatAdminRights startAdminRights;
-		bool startAutoSubmit = false;
-		QString botAppName;
-		bool botAppForceConfirmation = false;
-		QString attachBotUsername;
-		std::optional<QString> attachBotToggleCommand;
-		bool attachBotMenuOpen = false;
-		InlineBots::PeerTypes attachBotChooseTypes;
-		std::optional<QString> voicechatHash;
-		FullMsgId clickFromMessageId;
-		QString clickFromAttachBotWebviewUrl;
-	};
 	void showPeerByLink(const PeerByLinkInfo &info);
 
 	void showRepliesForMessage(
@@ -278,6 +240,11 @@ public:
 		FullMsgId contextId,
 		const SectionShow &params = SectionShow());
 
+	void searchInChat(Dialogs::Key inChat);
+	void searchMessages(const QString &query, Dialogs::Key inChat);
+
+	void resolveBoostState(not_null<ChannelData*> channel);
+
 	base::weak_ptr<Ui::Toast::Instance> showToast(
 		Ui::Toast::Config &&config);
 	base::weak_ptr<Ui::Toast::Instance> showToast(
@@ -314,7 +281,6 @@ private:
 		not_null<PeerData*> peer,
 		const PeerByLinkInfo &info);
 
-	void resolveBoostState(not_null<ChannelData*> channel);
 	void applyBoost(
 		not_null<ChannelData*> channel,
 		Fn<void(Ui::BoostCounters)> done);
@@ -378,7 +344,12 @@ public:
 
 	// This is needed for History TopBar updating when searchInChat
 	// is changed in the Dialogs::Widget of the current window.
-	rpl::variable<Dialogs::Key> searchInChat;
+	rpl::producer<Dialogs::Key> searchInChatValue() const {
+		return _searchInChat.value();
+	}
+	void setSearchInChat(Dialogs::Key value) {
+		_searchInChat = value;
+	}
 	bool uniqueChatsInSearchResults() const;
 
 	void openFolder(not_null<Data::Folder*> folder);
@@ -419,6 +390,7 @@ public:
 
 	void showEditPeerBox(PeerData *peer);
 	void showGiftPremiumBox(UserData *user);
+	void showGiftPremiumsBox(const QString &ref);
 
 	void enableGifPauseReason(GifPauseReason reason);
 	void disableGifPauseReason(GifPauseReason reason);
@@ -438,7 +410,7 @@ public:
 	[[nodiscard]] ColumnLayout computeColumnLayout() const;
 	int dialogsSmallColumnWidth() const;
 	bool forceWideDialogs() const;
-	void updateColumnLayout();
+	void updateColumnLayout() const;
 	bool canShowThirdSection() const;
 	bool canShowThirdSectionWithoutResize() const;
 	bool takeThirdSectionFromLayer();
@@ -519,8 +491,8 @@ public:
 	void showChooseReportMessages(
 		not_null<PeerData*> peer,
 		Ui::ReportReason reason,
-		Fn<void(MessageIdsList)> done);
-	void clearChooseReportMessages();
+		Fn<void(MessageIdsList)> done) const;
+	void clearChooseReportMessages() const;
 
 	void showInNewWindow(
 		not_null<PeerData*> peer,
@@ -528,7 +500,7 @@ public:
 
 	void toggleChooseChatTheme(
 		not_null<PeerData*> peer,
-		std::optional<bool> show = std::nullopt);
+		std::optional<bool> show = std::nullopt) const;
 	void finishChatThemeEdit(not_null<PeerData*> peer);
 
 	[[nodiscard]] bool dialogsListFocused() const {
@@ -604,10 +576,10 @@ public:
 
 	struct PaintContextArgs {
 		not_null<Ui::ChatTheme*> theme;
-		int visibleAreaTop = 0;
-		int visibleAreaTopGlobal = 0;
-		int visibleAreaWidth = 0;
 		QRect clip;
+		QPoint visibleAreaPositionGlobal;
+		int visibleAreaTop = 0;
+		int visibleAreaWidth = 0;
 	};
 	[[nodiscard]] Ui::ChatPaintContext preparePaintContext(
 		PaintContextArgs &&args);
@@ -627,7 +599,7 @@ public:
 	void setPremiumRef(const QString &ref);
 	[[nodiscard]] QString premiumRef() const;
 
-	[[nodiscard]] bool contentOverlapped(QWidget *w, QPaintEvent *e);
+	[[nodiscard]] bool contentOverlapped(QWidget *w, QPaintEvent *e) const;
 
 	[[nodiscard]] std::shared_ptr<ChatHelpers::Show> uiShow() override;
 
@@ -640,7 +612,7 @@ private:
 	struct CachedTheme;
 
 	void init();
-	void initSupportMode();
+	void setupShortcuts();
 	void refreshFiltersMenu();
 	void checkOpenedFilter();
 	void suggestArchiveAndMute();
@@ -697,6 +669,7 @@ private:
 	// Depends on _gifPause*.
 	const std::unique_ptr<ChatHelpers::TabbedSelector> _tabbedSelector;
 
+	rpl::variable<Dialogs::Key> _searchInChat;
 	rpl::variable<Dialogs::RowDescriptor> _activeChatEntry;
 	rpl::lifetime _activeHistoryLifetime;
 	rpl::variable<bool> _dialogsListFocused = false;

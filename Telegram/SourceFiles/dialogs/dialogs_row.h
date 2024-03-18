@@ -39,6 +39,7 @@ class Entry;
 enum class SortMode;
 
 [[nodiscard]] QRect CornerBadgeTTLRect(int photoSize);
+[[nodiscard]] QImage BlurredDarkenedPart(QImage image, QRect part);
 
 class BasicRow {
 public:
@@ -70,9 +71,13 @@ public:
 	[[nodiscard]] Ui::PeerUserpicView &userpicView() const {
 		return _userpic;
 	}
+	[[nodiscard]] Ui::PeerUserpicView &userpicCornerView() const {
+		return _userpicCorner;
+	}
 
 private:
 	mutable Ui::PeerUserpicView _userpic;
+	mutable Ui::PeerUserpicView _userpicCorner;
 	mutable std::unique_ptr<Ui::RippleAnimation> _ripple;
 
 };
@@ -129,6 +134,9 @@ public:
 	}
 	[[nodiscard]] Data::Thread *thread() const {
 		return _id.thread();
+	}
+	[[nodiscard]] Data::SavedSublist *sublist() const {
+		return _id.sublist();
 	}
 	[[nodiscard]] not_null<Entry*> entry() const {
 		return _id.entry();
@@ -197,6 +205,7 @@ private:
 	uint32 _index : 30 = 0;
 	uint32 _cornerBadgeShown : 1 = 0;
 	uint32 _topicJumpRipple : 1 = 0;
+	uint32 _hasVideoCall : 1 = 0;
 
 };
 

@@ -405,7 +405,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
-			.blockquote = context.quoteCache(parent()->colorIndex()),
+			.blockquote = context.quoteCache(parent()->contentColorIndex()),
 			.colors = context.st->highlightColors(),
 			.spoiler = Ui::Text::DefaultSpoilerCache(),
 			.now = context.now,
@@ -427,7 +427,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				InfoDisplayType::Image);
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
-			auto fastShareLeft = (fullRight + st::historyFastShareLeft);
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (-size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
 			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
 			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width());
 		}
@@ -459,7 +461,7 @@ PointState GroupedMedia::pointState(QPoint point) const {
 		return PointState::Outside;
 	}
 	const auto groupPadding = groupedPadding();
-	point -=  QPoint(0, groupPadding.top());
+	point -= QPoint(0, groupPadding.top());
 	for (const auto &part : _parts) {
 		if (part.geometry.contains(point)) {
 			return PointState::GroupPart;
@@ -501,7 +503,9 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			return bottomInfoResult;
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
-			auto fastShareLeft = (fullRight + st::historyFastShareLeft);
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (-size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
 			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
 			if (QRect(fastShareLeft, fastShareTop, size->width(), size->height()).contains(point)) {
 				result.link = _parent->rightActionLink(point
@@ -622,19 +626,20 @@ SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
 }
 
 TextSelection GroupedMedia::selectionFromQuote(
-		not_null<HistoryItem*> item,
-		const TextWithEntities &quote) const {
+		const SelectedQuote &quote) const {
+	Expects(quote.item != nullptr);
+
 	if (_mode != Mode::Column) {
-		return (_captionItem == item)
-			? Element::FindSelectionFromQuote(_caption, item, quote)
+		return (_captionItem == quote.item)
+			? Element::FindSelectionFromQuote(_caption, quote)
 			: TextSelection();
 	}
-	const auto i = ranges::find(_parts, item, &Part::item);
+	const auto i = ranges::find(_parts, not_null(quote.item), &Part::item);
 	if (i == end(_parts)) {
 		return {};
 	}
 	const auto index = int(i - begin(_parts));
-	auto result = i->content->selectionFromQuote(item, quote);
+	auto result = i->content->selectionFromQuote(quote);
 	if (result.empty()) {
 		return AddGroupItemSelection({}, index);
 	}

@@ -81,7 +81,10 @@ enum class TabbedSelectorMode {
 	EmojiOnly,
 	MediaEditor,
 	EmojiStatus,
+	ChannelStatus,
 	BackgroundEmoji,
+	FullReactions,
+	RecentReactions,
 };
 
 struct TabbedSelectorDescriptor {
@@ -192,16 +195,19 @@ private:
 		object_ptr<Inner> takeWidget();
 		void returnWidget(object_ptr<Inner> widget);
 
-		SelectorTab type() const {
+		[[nodiscard]] SelectorTab type() const {
 			return _type;
 		}
-		int index() const {
+		[[nodiscard]] int index() const {
 			return _index;
 		}
-		Inner *widget() const {
+		[[nodiscard]] Inner *widget() const {
 			return _weak;
 		}
-		not_null<InnerFooter*> footer() const {
+		[[nodiscard]] bool hasFooter() const {
+			return _footer != nullptr;
+		}
+		[[nodiscard]] not_null<InnerFooter*> footer() const {
 			return _footer;
 		}
 
@@ -209,7 +215,7 @@ private:
 		void saveScrollTop(int scrollTop) {
 			_scrollTop = scrollTop;
 		}
-		int getScrollTop() const {
+		[[nodiscard]] int getScrollTop() const {
 			return _scrollTop;
 		}
 
@@ -279,6 +285,7 @@ private:
 	Mode _mode = Mode::Full;
 	int _roundRadius = 0;
 	int _footerTop = 0;
+	bool _noFooter = false;
 	Ui::CornersPixmaps _panelRounding;
 	Ui::CornersPixmaps _categoriesRounding;
 	PeerData *_currentPeer = nullptr;

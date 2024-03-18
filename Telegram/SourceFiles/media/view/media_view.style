@@ -439,10 +439,14 @@ storiesHeaderName: FlatLabel(defaultFlatLabel) {
 storiesHeaderNamePosition: point(50px, 0px);
 storiesHeaderDate: FlatLabel(defaultFlatLabel) {
 	textFg: mediaviewControlFg;
+	palette: TextPalette(defaultTextPalette) {
+		linkFg: mediaviewControlFg;
+	}
 	minWidth: 10px;
 	maxHeight: 20px;
 }
 storiesHeaderDatePosition: point(50px, 17px);
+storiesHeaderRepostWidthMin: 40px;
 storiesShadowTop: icon{{ "mediaview/shadow_bottom-flip_vertical", windowShadowFg }};
 storiesShadowBottom: mediaviewShadowBottom;
 storiesControlsMinWidth: 280px;
@@ -604,6 +608,9 @@ storiesEmojiPan: EmojiPan(defaultEmojiPan) {
 	colorAllLabel: storiesColorAllLabel;
 	removeSet: storiesRemoveSet;
 	boxLabel: storiesBoxLabel;
+	about: FlatLabel(defaultEmojiPanAbout) {
+		textFg: storiesComposeGrayText;
+	}
 	icons: ComposeIcons {
 		settings: icon {{ "emoji/emoji_settings", storiesComposeGrayIcon }};
 
@@ -639,10 +646,6 @@ storiesEmojiPan: EmojiPan(defaultEmojiPan) {
 		stripBubble: icon{
 			{ "chat/reactions_bubble_shadow", windowShadowFg },
 			{ "chat/reactions_bubble", storiesComposeBg },
-		};
-		stripPremiumLocked: icon{
-			{ "chat/reactions_premium_bg", storiesComposeBgRipple },
-			{ "chat/reactions_premium_star", storiesComposeGrayIcon },
 		};
 		stripExpandPanel: icon{
 			{ "chat/reactions_round_big", storiesComposeBgRipple },
@@ -777,6 +780,32 @@ storiesComposeControls: ComposeControls(defaultComposeControls) {
 		borderFgError: activeLineFgError;
 
 		menu: storiesPopupMenu;
+	}
+	restrictionLabel: FlatLabel(defaultFlatLabel) {
+		minWidth: 12px;
+		textFg: storiesComposeGrayText;
+		align: align(top);
+	}
+	premiumRequired: ComposePremiumRequired {
+		label: FlatLabel(defaultFlatLabel) {
+			minWidth: 12px;
+			textFg: storiesComposeGrayText;
+		}
+		button: RoundButton(defaultActiveButton) {
+			textFg: storiesComposeWhiteText;
+			textFgOver: storiesComposeWhiteText;
+			textBg: groupCallMembersBgRipple;
+			textBgOver: groupCallMembersBgRipple;
+			width: -12px;
+			height: 18px;
+			textTop: 0px;
+			font: font(12px);
+			ripple: storiesComposeRipple;
+		}
+		buttonSkip: 6px;
+		buttonTop: 14px;
+		position: point(37px, 14px);
+		icon: icon{{ "emoji/premium_lock", storiesComposeGrayIcon, point(13px, 14px) }};
 	}
 }
 storiesViewsMenu: PopupMenu(storiesPopupMenuWithIcons) {
@@ -1015,3 +1044,13 @@ storiesLikeCountStyle: TextStyle(defaultTextStyle) {
 	font: font(32px semibold);
 }
 storiesChangelogFooterWidthMin: 240px;
+
+storiesRepostSimpleStyle: QuoteStyle(defaultQuoteStyle) {
+	padding: margins(8px, 2px, 8px, 2px);
+	verticalSkip: 4px;
+	outline: 0px;
+	radius: 10px;
+}
+storiesRepostIcon: icon {{ "mediaview/mini_repost", windowFg }};
+storiesRepostIconPadding: margins(0px, 4px, 2px, 0px);
+storiesRepostUserpicPadding: margins(0px, 1px, 4px, 0px);

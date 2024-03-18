@@ -232,7 +232,7 @@ QSize Photo::countCurrentSize(int newWidth) {
 	const auto thumbMaxWidth = qMin(newWidth, st::maxMediaSize);
 	const auto minWidth = std::clamp(
 		_parent->minWidthForMedia(),
-		(_parent->hasBubble()
+		qMin(thumbMaxWidth, _parent->hasBubble()
 			? st::historyPhotoBubbleMinWidth
 			: st::minPhotoSize),
 		thumbMaxWidth);
@@ -367,7 +367,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		}
 	}
 
-	const auto showEnlarge = loaded && _showEnlarge;
+	const auto showEnlarge = false;
 	const auto paintInCenter = (radial || (!loaded && !_data->loading()));
 	if (paintInCenter || showEnlarge) {
 		p.setPen(Qt::NoPen);
@@ -437,7 +437,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
-			.blockquote = context.quoteCache(parent()->colorIndex()),
+			.blockquote = context.quoteCache(parent()->contentColorIndex()),
 			.colors = context.st->highlightColors(),
 			.spoiler = Ui::Text::DefaultSpoilerCache(),
 			.now = context.now,
@@ -459,7 +459,9 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 				InfoDisplayType::Image);
 		}
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-			auto fastShareLeft = (fullRight + st::historyFastShareLeft);
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (paintx - size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
 			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
 			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
 		}
@@ -666,10 +668,10 @@ QRect Photo::enlargeRect() const {
 	const auto enlargeInner = st::historyPageEnlargeSize;
 	const auto enlargeOuter = 2 * skip + enlargeInner;
 	return {
-	   width() - enlargeOuter + skip,
-	   skip,
-	   enlargeInner,
-	   enlargeInner,
+		width() - enlargeOuter + skip,
+		skip,
+		enlargeInner,
+		enlargeInner,
 	};
 }
 
@@ -735,7 +737,9 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 			return bottomInfoResult;
 		}
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-			auto fastShareLeft = (fullRight + st::historyFastShareLeft);
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (paintx - size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
 			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
 			if (QRect(fastShareLeft, fastShareTop, size->width(), size->height()).contains(point)) {
 				result.link = _parent->rightActionLink(point
@@ -907,7 +911,7 @@ bool Photo::dataLoaded() const {
 }
 
 bool Photo::needInfoDisplay() const {
-	if (_parent->data()->isFakeBotAbout()) {
+	if (_parent->data()->isFakeAboutView()) {
 		return false;
 	}
 	return _parent->data()->isSending()
@@ -1107,10 +1111,8 @@ SelectedQuote Photo::selectedQuote(TextSelection selection) const {
 	return Element::FindSelectedQuote(_caption, selection, _realParent);
 }
 
-TextSelection Photo::selectionFromQuote(
-		not_null<HistoryItem*> item,
-		const TextWithEntities &quote) const {
-	return Element::FindSelectionFromQuote(_caption, item, quote);
+TextSelection Photo::selectionFromQuote(const SelectedQuote &quote) const {
+	return Element::FindSelectionFromQuote(_caption, quote);
 }
 
 void Photo::hideSpoilers() {

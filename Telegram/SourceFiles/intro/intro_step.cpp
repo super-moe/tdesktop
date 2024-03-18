@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "boxes/abstract_box.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "apiwrap.h"
@@ -192,8 +193,8 @@ void Step::finish(const MTPUser &user, QImage &&photo) {
 	}
 
 	api().request(MTPmessages_GetDialogFilters(
-	)).done([=](const MTPVector<MTPDialogFilter> &result) {
-		createSession(user, photo, result.v);
+	)).done([=](const MTPmessages_DialogFilters &result) {
+		createSession(user, photo, result.data().vfilters().v);
 	}).fail([=] {
 		createSession(user, photo, QVector<MTPDialogFilter>());
 	}).send();

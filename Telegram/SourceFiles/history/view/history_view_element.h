@@ -56,7 +56,10 @@ enum class Context : char {
 	Replies,
 	Pinned,
 	AdminLog,
-	ContactPreview
+	ContactPreview,
+	SavedSublist,
+	TTLViewer,
+	ShortcutMessages,
 };
 
 enum class OnlyEmojiAndSpaces : char {
@@ -95,6 +98,9 @@ public:
 	virtual bool elementShownUnread(not_null<const Element*> view) = 0;
 	virtual void elementSendBotCommand(
 		const QString &command,
+		const FullMsgId &context) = 0;
+	virtual void elementSearchInList(
+		const QString &query,
 		const FullMsgId &context) = 0;
 	virtual void elementHandleViaClick(not_null<UserData*> bot) = 0;
 	virtual bool elementIsChatWide() = 0;
@@ -143,6 +149,9 @@ public:
 	bool elementShownUnread(not_null<const Element*> view) override;
 	void elementSendBotCommand(
 		const QString &command,
+		const FullMsgId &context) override;
+	void elementSearchInList(
+		const QString &query,
 		const FullMsgId &context) override;
 	void elementHandleViaClick(not_null<UserData*> bot) override;
 	bool elementIsChatWide() override;
@@ -270,6 +279,7 @@ struct TopicButton {
 struct SelectedQuote {
 	HistoryItem *item = nullptr;
 	TextWithEntities text;
+	int offset = 0;
 
 	explicit operator bool() const {
 		return item && !text.empty();
@@ -315,6 +325,7 @@ public:
 	void refreshDataId();
 
 	[[nodiscard]] uint8 colorIndex() const;
+	[[nodiscard]] uint8 contentColorIndex() const;
 	[[nodiscard]] QDateTime dateTime() const;
 
 	[[nodiscard]] int y() const;
@@ -401,8 +412,7 @@ public:
 	virtual SelectedQuote selectedQuote(
 		TextSelection selection) const = 0;
 	virtual TextSelection selectionFromQuote(
-		not_null<HistoryItem*> item,
-		const TextWithEntities &quote) const = 0;
+		const SelectedQuote &quote) const = 0;
 	[[nodiscard]] virtual TextSelection adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const;
@@ -413,8 +423,7 @@ public:
 		not_null<HistoryItem*> item);
 	[[nodiscard]] static TextSelection FindSelectionFromQuote(
 		const Ui::Text::String &text,
-		not_null<HistoryItem*> item,
-		const TextWithEntities &quote);
+		const SelectedQuote &quote);
 
 	[[nodiscard]] virtual auto reactionButtonParameters(
 		QPoint position,
@@ -439,6 +448,7 @@ public:
 	[[nodiscard]] virtual TopicButton *displayedTopicButton() const;
 	[[nodiscard]] virtual bool displayForwardedFrom() const;
 	[[nodiscard]] virtual bool hasOutLayout() const;
+	[[nodiscard]] bool hasRightLayout() const;
 	[[nodiscard]] virtual bool drawBubble() const;
 	[[nodiscard]] virtual bool hasBubble() const;
 	[[nodiscard]] virtual bool unwrapped() const;
@@ -465,6 +475,8 @@ public:
 		const ClickHandlerPtr &handler) const;
 	[[nodiscard]] virtual bool allowTextSelectionByHandler(
 		const ClickHandlerPtr &handler) const;
+
+	[[nodiscard]] bool usesBubblePattern(const PaintContext &context) const;
 
 	struct VerticalRepaintRange {
 		int top = 0;
@@ -516,6 +528,7 @@ public:
 		const Reactions::InlineList &reactions) const;
 	void clearCustomEmojiRepaint() const;
 	void hideSpoilers();
+	void repaint() const;
 
 	[[nodiscard]] ClickHandlerPtr fromPhotoLink() const {
 		return fromLink();
@@ -532,6 +545,10 @@ public:
 
 	void overrideMedia(std::unique_ptr<Media> media);
 
+	virtual bool consumeHorizontalScroll(QPoint position, int delta) {
+		return false;
+	}
+
 	virtual ~Element();
 
 	static void Hovered(Element *view);
@@ -547,8 +564,6 @@ public:
 	static void ClearGlobal();
 
 protected:
-	void repaint() const;
-
 	void paintHighlight(
 		Painter &p,
 		const PaintContext &context,

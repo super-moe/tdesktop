@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "history/view/media/history_view_media.h"
+#include "ui/userpic_view.h"
 
 namespace Data {
 class Media;
@@ -26,8 +27,6 @@ public:
 		not_null<Element*> parent,
 		not_null<WebPageData*> data,
 		MediaWebPageFlags flags);
-
-	[[nodiscard]] static bool HasButton(not_null<WebPageData*> data);
 
 	void refreshParentId(not_null<HistoryItem*> realParent) override;
 
@@ -131,6 +130,14 @@ private:
 	mutable std::shared_ptr<Data::PhotoMedia> _photoMedia;
 	mutable std::unique_ptr<Ui::RippleAnimation> _ripple;
 
+	struct SponsoredData final {
+		PeerData *peer = nullptr;
+		Ui::PeerUserpicView userpicView;
+		QString buttonText;
+		bool hasExternalLink = false;
+	};
+	mutable std::optional<SponsoredData> _sponsoredData;
+
 	int _dataVersion = -1;
 	int _siteNameLines = 0;
 	int _descriptionLines = 0;
@@ -140,10 +147,9 @@ private:
 	Ui::Text::String _siteName;
 	Ui::Text::String _title;
 	Ui::Text::String _description;
+	Ui::Text::String _openButton;
 
-	QString _openButton;
 	QString _duration;
-	int _openButtonWidth = 0;
 	int _durationWidth = 0;
 
 	mutable QPoint _lastPoint;

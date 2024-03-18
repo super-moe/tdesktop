@@ -37,6 +37,7 @@ namespace {
 constexpr auto kTopLayer = 2;
 constexpr auto kBottomLayer = 1;
 constexpr auto kNoneLayer = 0;
+constexpr auto kBlurRadius = 24;
 
 [[nodiscard]] QImage CornerBadgeTTL(
 		not_null<PeerData*> peer,
@@ -46,38 +47,17 @@ constexpr auto kNoneLayer = 0;
 	if (!ttl) {
 		return QImage();
 	}
-	constexpr auto kBlurRadius = 24;
-
 	const auto ratio = style::DevicePixelRatio();
 	const auto fullSize = photoSize;
-	const auto blurredFull = Images::BlurLargeImage(
-		peer->generateUserpicImage(view, fullSize * ratio, 0),
-		kBlurRadius);
 	const auto partRect = CornerBadgeTTLRect(fullSize);
 	const auto &partSize = partRect.width();
-	auto result = [&] {
-		auto blurredPart = blurredFull.copy(
-			blurredFull.width() - partSize * ratio,
-			blurredFull.height() - partSize * ratio,
-			partSize * ratio,
-			partSize * ratio);
-		blurredPart.setDevicePixelRatio(ratio);
-
-		constexpr auto kMinAcceptableContrast = 4.5;
-		const auto averageColor = Ui::CountAverageColor(blurredPart);
-		const auto contrast = Ui::CountContrast(
-			averageColor,
-			st::premiumButtonFg->c);
-		if (contrast < kMinAcceptableContrast) {
-			constexpr auto kDarkerBy = 0.2;
-			auto painterPart = QPainter(&blurredPart);
-			painterPart.setOpacity(kDarkerBy);
-			painterPart.fillRect(
-				QRect(QPoint(), partRect.size()),
-				Qt::black);
-		}
-		return Images::Circle(std::move(blurredPart));
-	}();
+	const auto partSkip = fullSize - partSize;
+	auto result = Images::Circle(BlurredDarkenedPart(
+		peer->generateUserpicImage(view, fullSize * ratio, 0),
+		QRect(
+			QPoint(partSkip, partSkip) * ratio,
+			QSize(partSize, partSize) * ratio)));
+	result.setDevicePixelRatio(ratio);
 
 	auto q = QPainter(&result);
 	PainterHighQualityEnabler hq(q);
@@ -106,7 +86,7 @@ constexpr auto kNoneLayer = 0;
 	q.drawArc(innerRect, arc::kQuarterLength, arc::kHalfLength);
 
 	q.setClipRect(innerRect
-		- QMargins(innerRect.width() / 2, 0, -penWidth, -penWidth));
+		- QMargins(innerRect.width() / 2, -penWidth, -penWidth, -penWidth));
 	pen.setStyle(Qt::DotLine);
 	q.setPen(pen);
 	q.drawEllipse(innerRect);
@@ -123,6 +103,27 @@ QRect CornerBadgeTTLRect(int photoSize) {
 		photoSize - partSize + st::dialogsTTLBadgeSkip.y(),
 		partSize,
 		partSize);
+}
+
+QImage BlurredDarkenedPart(QImage image, QRect part) {
+	auto blurred = Images::BlurLargeImage(
+		std::move(image),
+		kBlurRadius).copy(part);
+
+	constexpr auto kMinAcceptableContrast = 4.5;
+	const auto averageColor = Ui::CountAverageColor(blurred);
+	const auto contrast = Ui::CountContrast(
+		averageColor,
+		st::premiumButtonFg->c);
+	if (contrast < kMinAcceptableContrast) {
+		constexpr auto kDarkerBy = 0.2;
+		auto painterPart = QPainter(&blurred);
+		painterPart.setOpacity(kDarkerBy);
+		painterPart.fillRect(QRect(QPoint(), part.size()), Qt::black);
+	}
+
+	blurred.setDevicePixelRatio(image.devicePixelRatio());
+	return blurred;
 }
 
 Row::CornerLayersManager::CornerLayersManager() = default;
@@ -260,8 +261,10 @@ void Row::recountHeight(float64 narrowRatio) {
 			: st::defaultDialogRow.height;
 	} else if (_id.folder()) {
 		_height = st::defaultDialogRow.height;
-	} else {
+	} else if (_id.topic()) {
 		_height = st::forumTopicRow.height;
+	} else {
+		_height = st::defaultDialogRow.height;
 	}
 }
 
@@ -304,11 +307,14 @@ void Row::updateCornerBadgeShown(
 		} else if (peer->isChannel()
 			&& Data::ChannelHasActiveCall(peer->asChannel())) {
 			return kTopLayer;
+		} else if (!peer->isForum() && (peer->isChat() || peer->isMegagroup()) && GetEnhancedBool("show_group_sender_avatar")){
+			return kTopLayer;
 		} else if (peer->messagesTTL()) {
 			return kBottomLayer;
 		}
 		return kNoneLayer;
 	}();
+	const_cast<Row*>(this)->_hasVideoCall = peer->isChannel() && Data::ChannelHasActiveCall(peer->asChannel());
 	setCornerBadgeShown(nextLayer, std::move(updateCallback));
 	if ((nextLayer == kTopLayer) && user) {
 		peer->owner().watchForOffline(user, now);
@@ -445,7 +451,7 @@ void Row::paintUserpic(
 		? _cornerBadgeShown
 		: !_cornerBadgeUserpic->layersManager.isDisplayedNone();
 	const auto storiesPeer = peer
-		? ((peer->isUser() || peer->isBroadcast()) ? peer : nullptr)
+		? ((peer->isUser() || peer->isChannel()) ? peer : nullptr)
 		: nullptr;
 	const auto storiesFolder = peer ? nullptr : _id.folder();
 	const auto storiesHas = GetEnhancedBool("hide_stories") ? false : storiesPeer
@@ -546,13 +552,17 @@ void Row::paintUserpic(
 	p.setOpacity(
 		_cornerBadgeUserpic->layersManager.progressForLayer(kTopLayer));
 	p.translate(context.st->padding.left(), context.st->padding.top());
-	actionPainter->paintSpeaking(
-		p,
-		context.st->photoSize - skip.x() - size,
-		context.st->photoSize - skip.y() - size,
-		context.width,
-		bg,
-		context.now);
+	if(_hasVideoCall){
+		actionPainter->paintSpeaking(
+			p,
+			context.st->photoSize - skip.x() - size,
+			context.st->photoSize - skip.y() - size,
+			context.width,
+			bg,
+			context.now);
+	} else if (const auto lastMessage = history->lastMessage()) {
+		lastMessage->from()->paintUserpic(p, userpicCornerView(), context.st->photoSize - skip.x() - size, context.st->photoSize - skip.y() - size, size);
+	}
 	p.translate(-context.st->padding.left(), -context.st->padding.top());
 	p.setOpacity(1.);
 }

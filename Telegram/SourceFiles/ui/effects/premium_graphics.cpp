@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/painter.h"
+#include "ui/rect.h"
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h"
 #include "styles/style_premium.h"
@@ -69,8 +70,8 @@ GradientRadioView::GradientRadioView(
 , _st(&st) {
 }
 
-void GradientRadioView::paint(QPainter &p, int left, int top, int outerWidth) {
-	PainterHighQualityEnabler hq(p);
+void GradientRadioView::paint(QPainter &p, int left, int top, int outerW) {
+	auto hq = PainterHighQualityEnabler(p);
 
 	const auto toggled = currentAnimationValue();
 	const auto toggledFg = _brushOverride
@@ -80,17 +81,17 @@ void GradientRadioView::paint(QPainter &p, int left, int top, int outerWidth) {
 	{
 		const auto skip = (_st->outerSkip / 10.) + (_st->thickness / 2);
 		const auto rect = QRectF(left, top, _st->diameter, _st->diameter)
-			- QMarginsF(skip, skip, skip, skip);
+			- Margins(skip);
 
 		p.setBrush(_st->bg);
 		if (toggled < 1) {
 			p.setPen(QPen(_st->untoggledFg, _st->thickness));
-			p.drawEllipse(style::rtlrect(rect, outerWidth));
+			p.drawEllipse(style::rtlrect(rect, outerW));
 		}
 		if (toggled > 0) {
 			p.setOpacity(toggled);
 			p.setPen(QPen(toggledFg, _st->thickness));
-			p.drawEllipse(style::rtlrect(rect, outerWidth));
+			p.drawEllipse(style::rtlrect(rect, outerW));
 		}
 	}
 
@@ -102,8 +103,8 @@ void GradientRadioView::paint(QPainter &p, int left, int top, int outerWidth) {
 		const auto skip1 = _st->skip / 10.;
 		const auto checkSkip = skip0 * (1. - toggled) + skip1 * toggled;
 		const auto rect = QRectF(left, top, _st->diameter, _st->diameter)
-			- QMarginsF(checkSkip, checkSkip, checkSkip, checkSkip);
-		p.drawEllipse(style::rtlrect(rect, outerWidth));
+			- Margins(checkSkip);
+		p.drawEllipse(style::rtlrect(rect, outerW));
 	}
 }
 
@@ -343,7 +344,7 @@ void Bubble::paintBubble(QPainter &p, const QRect &r, const QBrush &brush) {
 		pathBubble.setFillRule(Qt::WindingFill);
 		pathBubble.addRoundedRect(bubbleRect, radius, radius);
 
-		PainterHighQualityEnabler hq(p);
+		auto hq = PainterHighQualityEnabler(p);
 		p.setPen(QPen(
 			brush,
 			penWidth,
@@ -875,7 +876,7 @@ void Line::recache(const QSize &s) {
 	{
 		auto leftPixmap = pixmap(width);
 		auto p = Painter(&leftPixmap);
-		PainterHighQualityEnabler hq(p);
+		auto hq = PainterHighQualityEnabler(p);
 		fill(p, pathRound(width), _st.gradientFromLeft);
 		if (_dynamic) {
 			p.setFont(st::normalFont);
@@ -888,7 +889,7 @@ void Line::recache(const QSize &s) {
 	{
 		auto rightPixmap = pixmap(width);
 		auto p = Painter(&rightPixmap);
-		PainterHighQualityEnabler hq(p);
+		auto hq = PainterHighQualityEnabler(p);
 		fill(p, pathRound(width), !_st.gradientFromLeft);
 		if (_dynamic) {
 			p.setFont(st::normalFont);
@@ -1027,7 +1028,7 @@ void AddAccountsRow(
 		badge.fill(Qt::transparent);
 
 		auto p = QPainter(&badge);
-		PainterHighQualityEnabler hq(p);
+		auto hq = PainterHighQualityEnabler(p);
 
 		p.setPen(Qt::NoPen);
 		const auto rectOut = QRect(QPoint(), size);
@@ -1062,7 +1063,7 @@ void AddAccountsRow(
 		});
 		const auto index = int(state->accounts.size()) - 1;
 		state->accounts[index].checkbox.setChecked(
-			index == group->value(),
+			index == group->current(),
 			anim::type::instant);
 
 		widget->paintRequest(
@@ -1302,7 +1303,9 @@ void AddGiftOptions(
 		int nowIndex = 0;
 		Ui::Animations::Simple animation;
 	};
+	const auto wasGroupValue = group->current();
 	const auto animation = parent->lifetime().make_state<Animation>();
+	animation->nowIndex = wasGroupValue;
 
 	const auto stops = GiftGradientStops();
 
@@ -1321,7 +1324,7 @@ void AddGiftOptions(
 		const auto &stCheckbox = st::defaultBoxCheckbox;
 		auto radioView = std::make_unique<GradientRadioView>(
 			st::defaultRadio,
-			(group->hasValue() && group->value() == index));
+			(group->hasValue() && group->current() == index));
 		const auto radioViewRaw = radioView.get();
 		const auto radio = Ui::CreateChild<Ui::Radiobutton>(
 			row,
@@ -1334,6 +1337,7 @@ void AddGiftOptions(
 		radio->show();
 		{ // Paint the last frame instantly for the layer animation.
 			group->setValue(0);
+			group->setValue(wasGroupValue);
 			radio->finishAnimating();
 		}
 
@@ -1369,7 +1373,7 @@ void AddGiftOptions(
 		row->paintRequest(
 		) | rpl::start_with_next([=](const QRect &r) {
 			auto p = QPainter(row);
-			PainterHighQualityEnabler hq(p);
+			auto hq = PainterHighQualityEnabler(p);
 
 			p.fillRect(r, Qt::transparent);
 
@@ -1437,11 +1441,7 @@ void AddGiftOptions(
 				p.setPen(pen);
 				p.setBrush(Qt::NoBrush);
 				const auto borderRect = row->rect()
-					- QMargins(
-						pen.width() / 2,
-						pen.width() / 2,
-						pen.width() / 2,
-						pen.width() / 2);
+					- Margins(pen.width() / 2);
 				const auto round = st.borderRadius;
 				p.drawRoundedRect(borderRect, round, round);
 			}
@@ -1468,7 +1468,7 @@ void AddGiftOptions(
 
 		row->setClickedCallback([=, duration = st::defaultCheck.duration] {
 			group->setValue(index);
-			animation->nowIndex = group->value();
+			animation->nowIndex = group->current();
 			animation->animation.stop();
 			animation->animation.start(
 				[=] { parent->update(); },

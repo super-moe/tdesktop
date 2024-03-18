@@ -10,8 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_chat_invite.h"
 #include "history/view/history_view_service_message.h"
 #include "history/view/history_view_message.h"
-#include "history/view/media/history_view_media.h"
 #include "history/view/media/history_view_media_grouped.h"
+#include "history/view/media/history_view_similar_channels.h"
 #include "history/view/media/history_view_sticker.h"
 #include "history/view/media/history_view_large_emoji.h"
 #include "history/view/media/history_view_custom_emoji.h"
@@ -21,7 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_reply.h"
 #include "history/view/history_view_spoiler_click_handler.h"
 #include "history/history.h"
-#include "history/history_item.h"
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
 #include "base/unixtime.h"
@@ -36,19 +35,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/reaction_fly_animation.h"
-#include "ui/chat/chat_style.h"
 #include "ui/toast/toast.h"
-#include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/item_text_options.h"
 #include "ui/painter.h"
 #include "data/data_session.h"
-#include "data/data_groups.h"
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
-#include "data/data_media_types.h"
 #include "data/data_sponsored_messages.h"
 #include "data/data_message_reactions.h"
+#include "data/data_user.h"
 #include "lang/lang_keys.h"
 #include "styles/style_chat.h"
 
@@ -69,16 +65,20 @@ Element *MousedElement/* = nullptr*/;
 		HistoryMessageForwarded *prevForwarded,
 		not_null<HistoryItem*> item,
 		HistoryMessageForwarded *forwarded) {
-	const auto sender = previous->originalSender();
+	const auto sender = previous->displayFrom();
 	if ((prevForwarded != nullptr) != (forwarded != nullptr)) {
 		return false;
-	} else if (sender != item->originalSender()) {
+	} else if (sender != item->displayFrom()) {
 		return false;
 	} else if (!prevForwarded || sender) {
 		return true;
 	}
-	const auto previousInfo = prevForwarded->hiddenSenderInfo.get();
-	const auto itemInfo = forwarded->hiddenSenderInfo.get();
+	const auto previousInfo = prevForwarded->savedFromHiddenSenderInfo
+		? prevForwarded->savedFromHiddenSenderInfo.get()
+		: prevForwarded->originalHiddenSenderInfo.get();
+	const auto itemInfo = forwarded->savedFromHiddenSenderInfo
+		? forwarded->savedFromHiddenSenderInfo.get()
+		: forwarded->originalHiddenSenderInfo.get();
 	Assert(previousInfo != nullptr);
 	Assert(itemInfo != nullptr);
 	return (*previousInfo == *itemInfo);
@@ -94,42 +94,6 @@ Element *MousedElement/* = nullptr*/;
 	}
 	return session->tryResolveWindow();
 }
-
-[[nodiscard]] bool CheckQuoteEntities(
-		const EntitiesInText &quoteEntities,
-		const TextWithEntities &original,
-		TextSelection selection) {
-	auto left = quoteEntities;
-	const auto allowed = std::array{
-		EntityType::Bold,
-		EntityType::Italic,
-		EntityType::Underline,
-		EntityType::StrikeOut,
-		EntityType::Spoiler,
-		EntityType::CustomEmoji,
-	};
-	for (const auto &entity : original.entities) {
-		const auto from = entity.offset();
-		const auto till = from + entity.length();
-		if (till <= selection.from || from >= selection.to) {
-			continue;
-		}
-		const auto quoteFrom = std::max(from, int(selection.from));
-		const auto quoteTill = std::min(till, int(selection.to));
-		const auto cut = EntityInText(
-			entity.type(),
-			quoteFrom - int(selection.from),
-			quoteTill - quoteFrom,
-			entity.data());
-		const auto i = ranges::find(left, cut);
-		if (i != left.end()) {
-			left.erase(i);
-		} else if (ranges::contains(allowed, cut.type())) {
-			return false;
-		}
-	}
-	return left.empty();
-};
 
 } // namespace
 
@@ -199,6 +163,11 @@ bool DefaultElementDelegate::elementShownUnread(
 
 void DefaultElementDelegate::elementSendBotCommand(
 	const QString &command,
+	const FullMsgId &context) {
+}
+
+void DefaultElementDelegate::elementSearchInList(
+	const QString &query,
 	const FullMsgId &context) {
 }
 
@@ -312,6 +281,9 @@ QString DateTooltipText(not_null<Element*> view) {
 				lt_user,
 				msgsigned->postAuthor);
 		}
+	}
+	if (item->isScheduled() && item->isSilent()) {
+		dateText += '\n' + QChar(0xD83D) + QChar(0xDD15);
 	}
 	if (const auto msgId = view->data()->fullId().msg) {
 		dateText += '\n' + tr::lng_message_id(tr::now) + QString::number(msgId.bare);
@@ -493,7 +465,7 @@ Element::Element(
 	Flag serviceFlag)
 : _delegate(delegate)
 , _data(data)
-, _dateTime(IsItemScheduledUntilOnline(data)
+, _dateTime((IsItemScheduledUntilOnline(data) || data->shortcutId())
 	? QDateTime()
 	: ItemDateTime(data))
 , _text(st::msgMinWidth)
@@ -509,8 +481,11 @@ Element::Element(
 	if (_context == Context::History) {
 		history()->setHasPendingResizedItems();
 	}
-	if (data->isFakeBotAbout() && !data->history()->peer->isRepliesChat()) {
-		AddComponents(FakeBotAboutTop::Bit());
+	if (data->isFakeAboutView()) {
+		const auto user = data->history()->peer->asUser();
+		if (user && user->isBot() && !user->isRepliesChat()) {
+			AddComponents(FakeBotAboutTop::Bit());
+		}
 	}
 }
 
@@ -528,6 +503,10 @@ not_null<History*> Element::history() const {
 
 uint8 Element::colorIndex() const {
 	return data()->colorIndex();
+}
+
+uint8 Element::contentColorIndex() const {
+	return data()->contentColorIndex();
 }
 
 QDateTime Element::dateTime() const {
@@ -762,13 +741,17 @@ void Element::refreshMedia(Element *replacing) {
 			}
 		}
 		_media = media->createView(this, replacing);
+	} else if (item->showSimilarChannels()) {
+		_media = std::make_unique<SimilarChannels>(this);
 	} else if (isOnlyCustomEmoji()
-		&& Core::App().settings().largeEmoji()) {
+		&& Core::App().settings().largeEmoji()
+		&& !item->isSponsored()) {
 		_media = std::make_unique<UnwrappedMedia>(
 			this,
 			std::make_unique<CustomEmoji>(this, onlyCustomEmoji()));
 	} else if (isIsolatedEmoji()
-		&& Core::App().settings().largeEmoji()) {
+		&& Core::App().settings().largeEmoji()
+		&& !item->isSponsored()) {
 		const auto emoji = isolatedEmoji();
 		const auto emojiStickers = &history()->session().emojiStickersPack();
 		const auto skipPremiumEffect = false;
@@ -846,7 +829,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 		return {};
 	}
 	const auto from = item->from();
-	const auto topicUrl =  u"internal:url:https://t.me/c/%1/%2"_q
+	const auto topicUrl = u"internal:url:https://t.me/c/%1/%2"_q
 		.arg(peerToChannel(peerId).bare)
 		.arg(topicRootId.bare);
 	const auto fromLink = [&](int index) {
@@ -1378,6 +1361,10 @@ bool Element::hasOutLayout() const {
 	return false;
 }
 
+bool Element::hasRightLayout() const {
+	return hasOutLayout() && !_delegate->elementIsChatWide();
+}
+
 bool Element::drawBubble() const {
 	return false;
 }
@@ -1427,6 +1414,14 @@ bool Element::toggleSelectionByHandlerClick(
 bool Element::allowTextSelectionByHandler(
 		const ClickHandlerPtr &handler) const {
 	return false;
+}
+
+bool Element::usesBubblePattern(const PaintContext &context) const {
+	return (context.selection != FullSelection)
+		&& hasOutLayout()
+		&& context.bubblesPattern
+		&& !context.viewport.isEmpty()
+		&& !context.bubblesPattern->pixmap.size().isEmpty();
 }
 
 bool Element::hasVisibleText() const {
@@ -1648,33 +1643,80 @@ SelectedQuote Element::FindSelectedQuote(
 			++i;
 		}
 	}
-	return { item, result };
+	return { item, result, modified.from };
 }
 
 TextSelection Element::FindSelectionFromQuote(
 		const Ui::Text::String &text,
-		not_null<HistoryItem*> item,
-		const TextWithEntities &quote) {
-	if (quote.empty()) {
+		const SelectedQuote &quote) {
+	Expects(quote.item != nullptr);
+
+	if (quote.text.empty()) {
 		return {};
 	}
-	const auto &original = item->originalText();
-	auto result = TextSelection();
-	auto offset = 0;
-	while (true) {
-		const auto i = original.text.indexOf(quote.text, offset);
-		if (i < 0) {
-			return {};
-		}
-		auto selection = TextSelection{
-			uint16(i),
-			uint16(i + quote.text.size()),
+	const auto &original = quote.item->originalText();
+	const auto length = int(original.text.size());
+	const auto qlength = int(quote.text.text.size());
+	const auto checkAt = [&](int offset) {
+		return TextSelection{
+			uint16(offset),
+			uint16(offset + qlength),
 		};
-		if (CheckQuoteEntities(quote.entities, original, selection)) {
-			result = selection;
-			break;
+	};
+	const auto findOneAfter = [&](int offset) {
+		if (offset > length - qlength) {
+			return TextSelection();
 		}
-		offset = i + 1;
+		const auto i = original.text.indexOf(quote.text.text, offset);
+		return (i >= 0) ? checkAt(i) : TextSelection();
+	};
+	const auto findOneBefore = [&](int offset) {
+		if (!offset) {
+			return TextSelection();
+		}
+		const auto end = std::min(offset + qlength - 1, length);
+		const auto from = end - length - 1;
+		const auto i = original.text.lastIndexOf(quote.text.text, from);
+		return (i >= 0) ? checkAt(i) : TextSelection();
+	};
+	const auto findAfter = [&](int offset) {
+		while (true) {
+			const auto result = findOneAfter(offset);
+			if (!result.empty() || result == TextSelection()) {
+				return result;
+			}
+			offset = result.from;
+		}
+	};
+	const auto findBefore = [&](int offset) {
+		while (true) {
+			const auto result = findOneBefore(offset);
+			if (!result.empty() || result == TextSelection()) {
+				return result;
+			}
+			offset = result.from - 2;
+			if (offset < 0) {
+				return result;
+			}
+		}
+	};
+	const auto findTwoWays = [&](int offset) {
+		const auto after = findAfter(offset);
+		if (after.empty()) {
+			return findBefore(offset);
+		} else if (after.from == offset) {
+			return after;
+		}
+		const auto before = findBefore(offset);
+		return before.empty()
+			? after
+			: (offset - before.from < after.from - offset)
+			? before
+			: after;
+	};
+	auto result = findTwoWays(quote.offset);
+	if (result.empty()) {
+		return {};
 	}
 	for (const auto &modification : text.modifications()) {
 		if (modification.position >= result.to) {

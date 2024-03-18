@@ -12,10 +12,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_chat_participant_status.h"
 #include "data/data_channel.h"
 #include "data/data_changes.h"
+#include "data/data_emoji_statuses.h"
+#include "data/data_message_reaction_id.h"
 #include "data/data_photo.h"
 #include "data/data_folder.h"
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
+#include "data/data_saved_messages.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
 #include "data/data_histories.h"
@@ -668,6 +671,17 @@ bool PeerData::changeBackgroundEmojiId(
 		: DocumentId());
 }
 
+bool PeerData::changeColor(
+		const tl::conditional<MTPPeerColor> &cloudColor) {
+	const auto changed1 = cloudColor
+		? changeColorIndex(cloudColor->data().vcolor())
+		: clearColorIndex();
+	const auto changed2 = changeBackgroundEmojiId(cloudColor
+		? cloudColor->data().vbackground_emoji_id().value_or_empty()
+		: DocumentId());
+	return changed1 || changed2;
+}
+
 void PeerData::fillNames() {
 	_nameWords.clear();
 	_nameFirstLetters.clear();
@@ -914,6 +928,24 @@ bool PeerData::changeBackgroundEmojiId(DocumentId id) {
 	_backgroundEmojiId = id;
 	return true;
 }
+
+void PeerData::setEmojiStatus(const MTPEmojiStatus &status) {
+	const auto parsed = Data::ParseEmojiStatus(status);
+	setEmojiStatus(parsed.id, parsed.until);
+}
+
+void PeerData::setEmojiStatus(DocumentId emojiStatusId, TimeId until) {
+	if (_emojiStatusId != emojiStatusId) {
+		_emojiStatusId = emojiStatusId;
+		session().changes().peerUpdated(this, UpdateFlag::EmojiStatus);
+	}
+	owner().emojiStatuses().registerAutomaticClear(this, until);
+}
+
+DocumentId PeerData::emojiStatusId() const {
+	return _emojiStatusId;
+}
+
 bool PeerData::isSelf() const {
 	if (const auto user = asUser()) {
 		return (user->flags() & UserDataFlag::Self);
@@ -998,6 +1030,10 @@ bool PeerData::sharedMediaInfo() const {
 	return isSelf() || isRepliesChat();
 }
 
+bool PeerData::savedSublistsInfo() const {
+	return isSelf() && owner().savedMessages().supported();
+}
+
 bool PeerData::hasStoriesHidden() const {
 	if (const auto user = asUser()) {
 		return user->hasStoriesHidden();
@@ -1065,6 +1101,9 @@ Data::RestrictionCheckResult PeerData::amRestricted(
 		}
 	};
 	if (const auto user = asUser()) {
+		if (user->meRequiresPremiumToWrite() && !user->session().premium()) {
+			return Result::Explicit();
+		}
 		return (right == ChatRestriction::SendVoiceMessages
 			|| right == ChatRestriction::SendVideoMessages)
 			? ((user->flags() & UserDataFlag::VoiceMessagesForbidden)
@@ -1083,7 +1122,8 @@ Data::RestrictionCheckResult PeerData::amRestricted(
 				: ChatRestrictions(0));
 		return (channel->amCreator() || allowByAdminRights(right, channel))
 			? Result::Allowed()
-			: (defaultRestrictions & right)
+			: ((defaultRestrictions & right)
+				&& !channel->unrestrictedByBoosts())
 			? Result::WithEveryone()
 			: (channel->restrictions() & right)
 			? Result::Explicit()
@@ -1215,16 +1255,30 @@ const QString &PeerData::themeEmoji() const {
 	return _themeEmoticon;
 }
 
-void PeerData::setWallPaper(std::optional<Data::WallPaper> paper) {
-	if (!paper && !_wallPaper) {
-		return;
-	} else if (paper && _wallPaper && _wallPaper->equals(*paper)) {
-		return;
+void PeerData::setWallPaper(
+		std::optional<Data::WallPaper> paper,
+		bool overriden) {
+	const auto paperChanged = (paper || _wallPaper)
+		&& (!paper || !_wallPaper || !_wallPaper->equals(*paper));
+	if (paperChanged) {
+		_wallPaper = paper
+			? std::make_unique<Data::WallPaper>(std::move(*paper))
+			: nullptr;
 	}
-	_wallPaper = paper
-		? std::make_unique<Data::WallPaper>(std::move(*paper))
-		: nullptr;
-	session().changes().peerUpdated(this, UpdateFlag::ChatWallPaper);
+
+	const auto overridenValue = overriden ? 1 : 0;
+	const auto overridenChanged = (_wallPaperOverriden != overridenValue);
+	if (overridenChanged) {
+		_wallPaperOverriden = overridenValue;
+	}
+
+	if (paperChanged || overridenChanged) {
+		session().changes().peerUpdated(this, UpdateFlag::ChatWallPaper);
+	}
+}
+
+bool PeerData::wallPaperOverriden() const {
+	return _wallPaperOverriden != 0;
 }
 
 const Data::WallPaper *PeerData::wallPaper() const {

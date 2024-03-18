@@ -33,10 +33,6 @@ int Launcher::exec() {
 	return Core::Launcher::exec();
 }
 
-void Launcher::initHook() {
-	QApplication::setAttribute(Qt::AA_DisableSessionManager, true);
-}
-
 bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cExeName().isEmpty()) {
 		return false;
@@ -115,14 +111,14 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		return GLib::spawn_async(
 			initialWorkingDir().toStdString(),
 			argumentsList,
-			std::nullopt,
+			{},
 			GLib::SpawnFlags::FILE_AND_ARGV_ZERO_,
 			nullptr,
 			nullptr,
 			nullptr);
 	} else if (!GLib::spawn_sync(
 			argumentsList,
-			std::nullopt,
+			{},
 			// if the spawn is sync, working directory is not set
 			// and GLib::SpawnFlags::LEAVE_DESCRIPTORS_OPEN_ is set,
 			// it goes through an optimized code path

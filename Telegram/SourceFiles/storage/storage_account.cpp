@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_config.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtp_instance.h"
+#include "lang/lang_keys.h"
 #include "history/history.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -2501,7 +2502,7 @@ void Account::writeRecentHashtagsAndBots() {
 		writeMapQueued();
 	}
 	quint32 size = sizeof(quint32) * 3, writeCnt = 0, searchCnt = 0, botsCnt = cRecentInlineBots().size();
-	for (auto i = write.cbegin(), e = write.cend(); i != e;  ++i) {
+	for (auto i = write.cbegin(), e = write.cend(); i != e; ++i) {
 		if (!i->first.isEmpty()) {
 			size += Serialize::stringSize(i->first) + sizeof(quint16);
 			++writeCnt;

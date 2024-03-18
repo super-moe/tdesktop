@@ -15,34 +15,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/userpic_button.h"
 #include "ui/effects/snowflakes.h"
 #include "ui/effects/toggle_arrow.h"
-#include "ui/widgets/buttons.h"
-#include "ui/widgets/labels.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/shadow.h"
+#include "ui/widgets/tooltip.h"
 #include "ui/wrap/slide_wrap.h"
-#include "ui/wrap/vertical_layout.h"
-#include "ui/wrap/vertical_layout_reorder.h"
-#include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
 #include "ui/text/text_options.h"
+#include "ui/new_badges.h"
 #include "ui/painter.h"
-#include "ui/empty_userpic.h"
+#include "ui/vertical_list.h"
 #include "ui/unread_badge_paint.h"
-#include "base/call_delayed.h"
 #include "inline_bots/bot_attach_web_view.h"
-#include "mainwindow.h"
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
 #include "support/support_templates.h"
 #include "settings/settings_advanced.h"
-#include "settings/settings_common.h"
 #include "settings/settings_calls.h"
 #include "settings/settings_information.h"
 #include "info/profile/info_profile_badge.h"
 #include "info/profile/info_profile_emoji_status_panel.h"
 #include "info/stories/info_stories_widget.h"
 #include "info/info_memento.h"
+#include "base/platform/base_platform_info.h"
 #include "base/qt_signal_producer.h"
 #include "boxes/about_box.h"
 #include "ui/boxes/confirm_box.h"
@@ -51,13 +46,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "calls/calls_box_controller.h"
 #include "lang/lang_keys.h"
 #include "core/click_handler_types.h"
-#include "core/core_settings.h"
 #include "core/application.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
-#include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_config.h"
 #include "data/data_document_media.h"
 #include "data/data_folder.h"
@@ -68,10 +61,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "styles/style_chat.h" // popupMenuExpandedSeparator
 #include "styles/style_window.h"
-#include "styles/style_widgets.h"
-#include "styles/style_dialogs.h"
 #include "styles/style_settings.h"
-#include "styles/style_boxes.h"
 #include "styles/style_info.h" // infoTopBarMenu
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
@@ -87,6 +77,37 @@ namespace Window {
 namespace {
 
 constexpr auto kPlayStatusLimit = 2;
+
+class VersionLabel final
+	: public Ui::FlatLabel
+	, public Ui::AbstractTooltipShower {
+public:
+	using Ui::FlatLabel::FlatLabel;
+
+	void clickHandlerActiveChanged(
+			const ClickHandlerPtr &action,
+			bool active) override {
+		update();
+		if (active && action && !action->dragText().isEmpty()) {
+			Ui::Tooltip::Show(1000, this);
+		} else {
+			Ui::Tooltip::Hide();
+		}
+	}
+
+	QString tooltipText() const override {
+		return u"Build date: %1."_q.arg(__DATE__);
+	}
+
+	QPoint tooltipPos() const override {
+		return QCursor::pos();
+	}
+
+	bool tooltipWindowActive() const override {
+		return Ui::AppInFocus() && Ui::InFocusChain(window());
+	}
+
+};
 
 [[nodiscard]] bool CanCheckSpecialEvent() {
 	static const auto result = [] {
@@ -128,16 +149,16 @@ void ShowCallsBox(not_null<Window::SessionController*> window) {
 		groupCalls->hide(anim::type::instant);
 		groupCalls->toggleOn(state->groupCallsController.shownValue());
 
-		Settings::AddSubsectionTitle(
+		Ui::AddSubsectionTitle(
 			groupCalls->entity(),
 			tr::lng_call_box_groupcalls_subtitle());
 		state->groupCallsDelegate.setContent(groupCalls->entity()->add(
 			object_ptr<PeerListContent>(box, &state->groupCallsController),
 			{}));
 		state->groupCallsController.setDelegate(&state->groupCallsDelegate);
-		Settings::AddSkip(groupCalls->entity());
-		Settings::AddDivider(groupCalls->entity());
-		Settings::AddSkip(groupCalls->entity());
+		Ui::AddSkip(groupCalls->entity());
+		Ui::AddDivider(groupCalls->entity());
+		Ui::AddSkip(groupCalls->entity());
 
 		const auto content = box->addRow(
 			object_ptr<PeerListContent>(box, &state->callsController),
@@ -235,15 +256,15 @@ void SetupMenuBots(
 				}
 				continue;
 			}
-			const auto button = Settings::AddButton(
+			const auto button = wrap->add(object_ptr<Ui::SettingsButton>(
 				wrap,
 				rpl::single(bot.name),
-				st::mainMenuButton);
+				st::mainMenuButton));
 			const auto menu = button->lifetime().make_state<
 				base::unique_qptr<Ui::PopupMenu>
 			>();
 			const auto icon = Ui::CreateChild<InlineBots::MenuBotIcon>(
-				button.get(),
+				button,
 				bot.media);
 			button->heightValue(
 			) | rpl::start_with_next([=](int height) {
@@ -275,33 +296,8 @@ void SetupMenuBots(
 				}
 			}, button->lifetime());
 
-			const auto badge = bots->showMainMenuNewBadge(bot)
-				? Ui::CreateChild<Ui::PaddingWrap<Ui::FlatLabel>>(
-					button.get(),
-					object_ptr<Ui::FlatLabel>(
-						button,
-						tr::lng_bot_side_menu_new(),
-						st::settingsPremiumNewBadge),
-					st::settingsPremiumNewBadgePadding)
-				: nullptr;
-			if (badge) {
-				badge->setAttribute(Qt::WA_TransparentForMouseEvents);
-				badge->paintRequest() | rpl::start_with_next([=] {
-					auto p = QPainter(badge);
-					auto hq = PainterHighQualityEnabler(p);
-					p.setPen(Qt::NoPen);
-					p.setBrush(st::windowBgActive);
-					const auto r = st::settingsPremiumNewBadgePadding.left();
-					p.drawRoundedRect(badge->rect(), r, r);
-				}, badge->lifetime());
-
-				button->sizeValue(
-				) | rpl::start_with_next([=](QSize size) {
-					badge->moveToRight(
-						st::mainMenuButton.padding.right(),
-						(size.height() - badge->height()) / 2,
-						size.width());
-				}, badge->lifetime());
+			if (bots->showMainMenuNewBadge(bot)) {
+				Ui::NewBadge::AddToRight(button);
 			}
 		}
 		wrap->resizeToWidth(width);
@@ -527,8 +523,11 @@ MainMenu::MainMenu(
 , _footer(_inner->add(object_ptr<Ui::RpWidget>(_inner.get())))
 , _telegram(
 	Ui::CreateChild<Ui::FlatLabel>(_footer.get(), st::mainMenuTelegramLabel))
-, _version(
-	Ui::CreateChild<Ui::FlatLabel>(
+, _version((Platform::IsMacStoreBuild() || Platform::IsWindowsStoreBuild())
+	? Ui::CreateChild<Ui::FlatLabel>(
+		_footer.get(),
+		st::mainMenuVersionLabel)
+	: Ui::CreateChild<VersionLabel>(
 		_footer.get(),
 		st::mainMenuVersionLabel)) {
 	setAttribute(Qt::WA_OpaquePaintEvent);
@@ -695,7 +694,7 @@ void MainMenu::setupArchive() {
 	const auto inner = wrap->entity();
 	wrap->toggle(checkArchive(), anim::type::instant);
 
-	const auto button = AddButton(
+	const auto button = AddButtonWithIcon(
 		inner,
 		tr::lng_archived_name(),
 		st::mainMenuButton,
@@ -848,7 +847,7 @@ void MainMenu::setupMenu() {
 	const auto addAction = [&](
 			rpl::producer<QString> text,
 			IconDescriptor &&descriptor) {
-		return AddButton(
+		return AddButtonWithIcon(
 			_menu,
 			std::move(text),
 			st::mainMenuButton,
@@ -878,7 +877,7 @@ void MainMenu::setupMenu() {
 			const auto wrap = _menu->add(
 				object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
 					_menu,
-					CreateButton(
+				CreateButtonWithIcon(
 						_menu,
 						tr::lng_menu_my_stories(),
 						st::mainMenuButton,
@@ -1054,7 +1053,7 @@ void MainMenu::chooseEmojiStatus() {
 	if (const auto widget = _badge->widget()) {
 		_emojiStatusPanel->show(_controller, widget, _badge->sizeTag());
 	} else {
-		ShowPremiumPreviewBox(_controller, PremiumPreview::EmojiStatus);
+		ShowPremiumPreviewBox(_controller, PremiumFeature::EmojiStatus);
 	}
 }
 

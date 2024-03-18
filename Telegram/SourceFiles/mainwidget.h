@@ -8,13 +8,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/weak_ptr.h"
-#include "base/unique_qptr.h"
 #include "chat_helpers/bot_command.h"
-#include "ui/rp_widget.h"
-#include "ui/effects/animations.h"
 #include "media/player/media_player_float.h"
 #include "mtproto/sender.h"
-#include "data/data_pts_waiter.h"
 
 struct HistoryMessageMarkupButton;
 class MainWindow;
@@ -207,8 +203,6 @@ public:
 
 	bool contentOverlapped(const QRect &globalRect);
 
-	void searchInChat(Dialogs::Key chat);
-
 	void showChooseReportMessages(
 		not_null<PeerData*> peer,
 		Ui::ReportReason reason,
@@ -290,7 +284,9 @@ private:
 	Window::SectionSlideParams prepareHistoryAnimation(PeerId historyPeerId);
 	Window::SectionSlideParams prepareDialogsAnimation();
 
-	void saveSectionInStack();
+	bool saveSectionInStack(
+		const SectionShow &params,
+		Window::SectionWidget *newMainSection = nullptr);
 
 	int getMainSectionTop() const;
 	int getThirdSectionTop() const;

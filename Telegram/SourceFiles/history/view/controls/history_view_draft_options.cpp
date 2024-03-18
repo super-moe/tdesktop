@@ -35,6 +35,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/discrete_sliders.h"
 #include "ui/painter.h"
+#include "ui/vertical_list.h"
 #include "window/themes/window_theme.h"
 #include "window/section_widget.h"
 #include "window/window_session_controller.h"
@@ -234,7 +235,7 @@ rpl::producer<SelectedQuote> PreviewWrap::showQuoteSelector(
 
 	initElement();
 
-	_selection = _element->selectionFromQuote(item, quote.text);
+	_selection = _element->selectionFromQuote(quote);
 	return _selection.value(
 	) | rpl::map([=](TextSelection selection) {
 		if (const auto result = _element->selectedQuote(selection)) {
@@ -256,38 +257,32 @@ rpl::producer<QString> PreviewWrap::showLinkSelector(
 		was->destroy();
 	}
 	using Flag = MTPDmessageMediaWebPage::Flag;
-	_draftItem = _history->addNewLocalMessage(
-		_history->nextNonHistoryEntryId(),
-		(MessageFlag::FakeHistoryItem
+	_draftItem = _history->addNewLocalMessage({
+		.id = _history->nextNonHistoryEntryId(),
+		.flags = (MessageFlag::FakeHistoryItem
 			| MessageFlag::Outgoing
 			| MessageFlag::HasFromId
 			| (webpage.invert ? MessageFlag::InvertMedia : MessageFlag())),
-		UserId(), // via
-		FullReplyTo(),
-		base::unixtime::now(), // date
-		_history->session().userPeerId(),
-		QString(), // postAuthor
-		HighlightParsedLinks({
-			message.text,
-			TextUtilities::ConvertTextTagsToEntities(message.tags),
-		}, links),
-		MTP_messageMediaWebPage(
-			MTP_flags(Flag()
-				| (webpage.forceLargeMedia
-					? Flag::f_force_large_media
-					: Flag())
-				| (webpage.forceSmallMedia
-					? Flag::f_force_small_media
-					: Flag())),
-			MTP_webPagePending(
-				MTP_flags(webpage.url.isEmpty()
-					? MTPDwebPagePending::Flag()
-					: MTPDwebPagePending::Flag::f_url),
-				MTP_long(webpage.id),
-				MTP_string(webpage.url),
-				MTP_int(0))),
-		HistoryMessageMarkupData(),
-		uint64(0)); // groupedId
+		.from = _history->session().userPeerId(),
+		.date = base::unixtime::now(),
+	}, HighlightParsedLinks({
+		message.text,
+		TextUtilities::ConvertTextTagsToEntities(message.tags),
+	}, links), MTP_messageMediaWebPage(
+		MTP_flags(Flag()
+			| (webpage.forceLargeMedia
+				? Flag::f_force_large_media
+				: Flag())
+			| (webpage.forceSmallMedia
+				? Flag::f_force_small_media
+				: Flag())),
+		MTP_webPagePending(
+			MTP_flags(webpage.url.isEmpty()
+				? MTPDwebPagePending::Flag()
+				: MTPDwebPagePending::Flag::f_url),
+			MTP_long(webpage.id),
+			MTP_string(webpage.url),
+			MTP_int(0))));
 	_element = _draftItem->createView(_delegate.get());
 	_selectType = TextSelectType::Letters;
 	_symbol = _selectionStartSymbol = 0;
@@ -375,7 +370,7 @@ void PreviewWrap::paintEvent(QPaintEvent *e) {
 				userpicTop,
 				width(),
 				st::msgPhotoSize);
-		} else if (const auto info = item->hiddenSenderInfo()) {
+		} else if (const auto info = item->originalHiddenSenderInfo()) {
 			if (info->customUserpic.empty()) {
 				info->emptyUserpic.paintCircle(
 					p,
@@ -600,7 +595,11 @@ void DraftOptionsBox(
 		rpl::lifetime resolveLifetime;
 	};
 	const auto state = box->lifetime().make_state<State>();
-	state->quote = SelectedQuote{ replyItem, draft.reply.quote };
+	state->quote = SelectedQuote{
+		replyItem,
+		draft.reply.quote,
+		draft.reply.quoteOffset,
+	};
 	state->webpage = draft.webpage;
 	state->preview = previewData;
 	state->shown = previewData ? Section::Link : Section::Reply;
@@ -642,6 +641,7 @@ void DraftOptionsBox(
 		if (const auto current = state->quote.current()) {
 			result.messageId = current.item->fullId();
 			result.quote = current.text;
+			result.quoteOffset = current.offset;
 		} else {
 			result.quote = {};
 		}
@@ -661,7 +661,7 @@ void DraftOptionsBox(
 
 		const auto item = state->quote.current().item;
 		if (item->allowsForward()) {
-			Settings::AddButton(
+			Settings::AddButtonWithIcon(
 				bottom,
 				tr::lng_reply_in_another_chat(),
 				st::settingsButton,
@@ -672,7 +672,7 @@ void DraftOptionsBox(
 		}
 
 		const auto weak = Ui::MakeWeak(box);
-		Settings::AddButton(
+		Settings::AddButtonWithIcon(
 			bottom,
 			tr::lng_reply_show_in_chat(),
 			st::settingsButton,
@@ -684,7 +684,7 @@ void DraftOptionsBox(
 			}
 		});
 
-		Settings::AddButton(
+		Settings::AddButtonWithIcon(
 			bottom,
 			tr::lng_reply_remove(),
 			st::settingsAttentionButtonWithIcon,
@@ -695,16 +695,14 @@ void DraftOptionsBox(
 
 		if (!item->originalText().empty()) {
 			AddFilledSkip(bottom);
-			Settings::AddDividerText(
-				bottom,
-				tr::lng_reply_about_quote());
+			Ui::AddDividerText(bottom, tr::lng_reply_about_quote());
 		}
 	};
 	const auto setupLinkActions = [=] {
 		AddFilledSkip(bottom);
 
 		if (!draft.textWithTags.empty()) {
-			Settings::AddButton(
+			Settings::AddButtonWithIcon(
 				bottom,
 				(state->webpage.invert
 					? tr::lng_link_move_down()
@@ -724,7 +722,7 @@ void DraftOptionsBox(
 			const auto small = state->webpage.forceSmallMedia
 				|| (!state->webpage.forceLargeMedia
 					&& state->preview->computeDefaultSmallMedia());
-			Settings::AddButton(
+			Settings::AddButtonWithIcon(
 				bottom,
 				(small
 					? tr::lng_link_enlarge_photo()
@@ -744,7 +742,7 @@ void DraftOptionsBox(
 			});
 		}
 
-		Settings::AddButton(
+		Settings::AddButtonWithIcon(
 			bottom,
 			tr::lng_link_remove(),
 			st::settingsAttentionButtonWithIcon,
@@ -755,9 +753,7 @@ void DraftOptionsBox(
 
 		if (args.links.size() > 1) {
 			AddFilledSkip(bottom);
-			Settings::AddDividerText(
-				bottom,
-				tr::lng_link_about_choose());
+			Ui::AddDividerText(bottom, tr::lng_link_about_choose());
 		}
 	};
 
@@ -890,14 +886,13 @@ void ShowReplyToChatBox(
 		using Chosen = not_null<Data::Thread*>;
 
 		Controller(not_null<Main::Session*> session)
-		: ChooseRecipientBoxController(
-			session,
-			[=](Chosen thread) mutable { _singleChosen.fire_copy(thread); },
-			nullptr) {
-		}
-
-		void rowClicked(not_null<PeerListRow*> row) override final {
-			ChooseRecipientBoxController::rowClicked(row);
+		: ChooseRecipientBoxController({
+			.session = session,
+			.callback = [=](Chosen thread) {
+				_singleChosen.fire_copy(thread);
+			},
+			.premiumRequiredError = WritePremiumRequiredError,
+		}) {
 		}
 
 		[[nodiscard]] rpl::producer<Chosen> singleChosen() const {
@@ -910,6 +905,7 @@ void ShowReplyToChatBox(
 
 	private:
 		void prepareViewHook() override {
+			ChooseRecipientBoxController::prepareViewHook();
 			delegate()->peerListSetTitle(tr::lng_reply_in_another_title());
 		}
 

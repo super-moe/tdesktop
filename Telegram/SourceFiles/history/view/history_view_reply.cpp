@@ -38,32 +38,40 @@ namespace {
 
 constexpr auto kNonExpandedLinesLimit = 5;
 
+} // namespace
+
 void ValidateBackgroundEmoji(
 		DocumentId backgroundEmojiId,
 		not_null<Ui::BackgroundEmojiData*> data,
 		not_null<Ui::BackgroundEmojiCache*> cache,
 		not_null<Ui::Text::QuotePaintCache*> quote,
 		not_null<const Element*> view) {
+	if (data->firstFrameMask.isNull() && !data->emoji) {
+		data->emoji = CreateBackgroundEmojiInstance(
+			&view->history()->owner(),
+			backgroundEmojiId,
+			crl::guard(view, [=] { view->repaint(); }));
+	}
+	ValidateBackgroundEmoji(backgroundEmojiId, data, cache, quote);
+}
+
+void ValidateBackgroundEmoji(
+		DocumentId backgroundEmojiId,
+		not_null<Ui::BackgroundEmojiData*> data,
+		not_null<Ui::BackgroundEmojiCache*> cache,
+		not_null<Ui::Text::QuotePaintCache*> quote) {
+	Expects(!data->firstFrameMask.isNull() || data->emoji != nullptr);
+
 	if (data->firstFrameMask.isNull()) {
 		if (!cache->frames[0].isNull()) {
 			for (auto &frame : cache->frames) {
 				frame = QImage();
 			}
 		}
-		const auto tag = Data::CustomEmojiSizeTag::Isolated;
-		if (!data->emoji) {
-			const auto owner = &view->history()->owner();
-			const auto repaint = crl::guard(view, [=] {
-				view->history()->owner().requestViewRepaint(view);
-			});
-			data->emoji = owner->customEmojiManager().create(
-				backgroundEmojiId,
-				repaint,
-				tag);
-		}
 		if (!data->emoji->ready()) {
 			return;
 		}
+		const auto tag = Data::CustomEmojiSizeTag::Isolated;
 		const auto size = Data::FrameSizeFromTag(tag);
 		data->firstFrameMask = QImage(
 			QSize(size, size),
@@ -117,8 +125,19 @@ void ValidateBackgroundEmoji(
 	cache->frames[2] = make(kSize3);
 }
 
+auto CreateBackgroundEmojiInstance(
+	not_null<Data::Session*> owner,
+	DocumentId backgroundEmojiId,
+	Fn<void()> repaint)
+-> std::unique_ptr<Ui::Text::CustomEmoji> {
+	return owner->customEmojiManager().create(
+		backgroundEmojiId,
+		repaint,
+		Data::CustomEmojiSizeTag::Isolated);
+}
+
 void FillBackgroundEmoji(
-		Painter &p,
+		QPainter &p,
 		const QRect &rect,
 		bool quote,
 		const Ui::BackgroundEmojiCache &cache) {
@@ -159,8 +178,6 @@ void FillBackgroundEmoji(
 	p.setOpacity(1.);
 }
 
-} // namespace
-
 Reply::Reply()
 : _name(st::maxSignatureSize / 2)
 , _text(st::maxSignatureSize / 2) {
@@ -184,14 +201,14 @@ void Reply::update(
 		}
 	}
 	_colorPeer = message
-		? message->displayFrom()
+		? message->contentColorsFrom()
 		: story
 		? story->peer().get()
 		: _externalSender
 		? _externalSender
 		: nullptr;
 	_hiddenSenderColorIndexPlusOne = (!_colorPeer && message)
-		? (message->hiddenSenderInfo()->colorIndex + 1)
+		? (message->originalHiddenSenderInfo()->colorIndex + 1)
 		: 0;
 
 	const auto hasPreview = (story && story->hasReplyPreview())
@@ -270,6 +287,7 @@ void Reply::setLinkFrom(
 	const auto quote = fields.manualQuote
 		? fields.quote
 		: TextWithEntities();
+	const auto quoteOffset = fields.quoteOffset;
 	const auto returnToId = view->data()->fullId();
 	const auto externalLink = [=](ClickContext context) {
 		const auto my = context.other.value<ClickHandlerContext>();
@@ -292,7 +310,8 @@ void Reply::setLinkFrom(
 							channel,
 							messageId,
 							returnToId,
-							quote
+							quote,
+							quoteOffset
 						)->onClick(context);
 					} else {
 						controller->showPeerInfo(channel);
@@ -313,7 +332,7 @@ void Reply::setLinkFrom(
 	const auto message = data->resolvedMessage.get();
 	const auto story = data->resolvedStory.get();
 	_link = message
-		? JumpToMessageClickHandler(message, returnToId, quote)
+		? JumpToMessageClickHandler(message, returnToId, quote, quoteOffset)
 		: story
 		? JumpToStoryClickHandler(story)
 		: (data->external()
@@ -357,8 +376,8 @@ QString Reply::senderName(
 		const auto forwarded
 			= data->resolvedMessage->Get<HistoryMessageForwarded>();
 		if (forwarded) {
-			Assert(forwarded->hiddenSenderInfo != nullptr);
-			return forwarded->hiddenSenderInfo->name;
+			Assert(forwarded->originalHiddenSenderInfo != nullptr);
+			return forwarded->originalHiddenSenderInfo->name;
 		}
 	}
 	return QString();
@@ -389,7 +408,10 @@ void Reply::updateName(
 		std::optional<PeerData*> resolvedSender) const {
 	auto viaBotUsername = QString();
 	const auto message = data->resolvedMessage.get();
-	if (message && !message->Has<HistoryMessageForwarded>()) {
+	const auto forwarded = message
+		? message->Get<HistoryMessageForwarded>()
+		: nullptr;
+	if (message && !forwarded) {
 		if (const auto bot = message->viaBot()) {
 			viaBotUsername = bot->username();
 		}
@@ -405,7 +427,15 @@ void Reply::updateName(
 		&& externalPeer
 		&& (externalPeer != sender)
 		&& (externalPeer->isChat() || externalPeer->isMegagroup());
-	const auto shorten = !viaBotUsername.isEmpty() || groupNameAdded;
+	const auto originalNameAdded = !displayAsExternal
+		&& forwarded
+		&& !message->isDiscussionPost()
+		&& (forwarded->forwardOfForward()
+			|| (!message->showForwardsFromSender(forwarded)
+				&& !view->data()->Has<HistoryMessageForwarded>()));
+	const auto shorten = !viaBotUsername.isEmpty()
+		|| groupNameAdded
+		|| originalNameAdded;
 	const auto name = sender
 		? senderName(sender, shorten)
 		: senderName(view, data, shorten);
@@ -424,6 +454,11 @@ void Reply::updateName(
 	if (groupNameAdded) {
 		nameFull.append(' ').append(PeerEmoji(history, externalPeer));
 		nameFull.append(externalPeer->name());
+	} else if (originalNameAdded) {
+		nameFull.append(' ').append(ForwardEmoji(&history->owner()));
+		nameFull.append(forwarded->originalSender
+			? forwarded->originalSender->name()
+			: forwarded->originalHiddenSenderInfo->name);
 	}
 	if (!viaBotUsername.isEmpty()) {
 		nameFull.append(u" @"_q).append(viaBotUsername);
@@ -697,7 +732,11 @@ void Reply::paint(
 			const auto textw = w
 				- st::historyReplyPadding.left()
 				- st::historyReplyPadding.right();
-			const auto namew = textw - previewSkip;
+			const auto namew = textw
+				- previewSkip
+				- (_hasQuoteIcon
+					? st::messageTextStyle.blockquote.icon.width()
+					: 0);
 			auto firstLineSkip = _nameTwoLines ? 0 : previewSkip;
 			if (namew > 0) {
 				p.setPen(!inBubble
@@ -777,7 +816,7 @@ void Reply::createRippleAnimation(
 		Ui::RippleAnimation::RoundRectMask(
 			size,
 			st::messageQuoteStyle.radius),
-		[=] { view->history()->owner().requestViewRepaint(view); });
+		[=] { view->repaint(); });
 }
 
 void Reply::saveRipplePoint(QPoint point) const {
@@ -799,6 +838,12 @@ void Reply::stopLastRipple() {
 TextWithEntities Reply::PeerEmoji(
 		not_null<History*> history,
 		PeerData *peer) {
+	return PeerEmoji(&history->owner(), peer);
+}
+
+TextWithEntities Reply::PeerEmoji(
+		not_null<Data::Session*> owner,
+		PeerData *peer) {
 	using namespace std;
 	const auto icon = !peer
 		? pair(&st::historyReplyUser, st::historyReplyUserPadding)
@@ -807,11 +852,17 @@ TextWithEntities Reply::PeerEmoji(
 		: (peer->isChannel() || peer->isChat())
 		? pair(&st::historyReplyGroup, st::historyReplyGroupPadding)
 		: pair(&st::historyReplyUser, st::historyReplyUserPadding);
-	const auto owner = &history->owner();
 	return Ui::Text::SingleCustomEmoji(
 		owner->customEmojiManager().registerInternalEmoji(
 			*icon.first,
 			icon.second));
+}
+
+TextWithEntities Reply::ForwardEmoji(not_null<Data::Session*> owner) {
+	return Ui::Text::SingleCustomEmoji(
+		owner->customEmojiManager().registerInternalEmoji(
+			st::historyReplyForward,
+			st::historyReplyForwardPadding));
 }
 
 TextWithEntities Reply::ComposePreviewName(

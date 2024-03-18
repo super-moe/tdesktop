@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <rpl/event_stream.h>
 #include <rpl/filter.h>
 #include <rpl/variable.h>
 #include "base/timer.h"
@@ -88,6 +87,7 @@ public:
 	[[nodiscard]] bool premiumPossible() const;
 	[[nodiscard]] rpl::producer<bool> premiumPossibleValue() const;
 	[[nodiscard]] bool premiumBadgesShown() const;
+	[[nodiscard]] bool premiumCanBuy() const;
 
 	[[nodiscard]] bool isTestMode() const;
 	[[nodiscard]] uint64 uniqueId() const; // userId() with TestDC shift.
@@ -191,12 +191,15 @@ public:
 	[[nodiscard]] Support::Helper &supportHelper() const;
 	[[nodiscard]] Support::Templates &supportTemplates() const;
 
-	[[nodiscard]] auto colorIndicesValue() const
+	[[nodiscard]] auto colorIndicesValue()
 		-> rpl::producer<Ui::ColorIndicesCompressed>;
 
 private:
 	static constexpr auto kDefaultSaveDelay = crl::time(1000);
 
+	void parseColorIndices(const MTPDhelp_peerColors &data);
+
+	const UserId _userId;
 	const not_null<Account*> _account;
 
 	const std::unique_ptr<SessionSettings> _settings;
@@ -210,7 +213,6 @@ private:
 
 	// _data depends on _downloader / _uploader.
 	const std::unique_ptr<Data::Session> _data;
-	const UserId _userId;
 	const not_null<UserData*> _user;
 
 	// _emojiStickersPack depends on _data.
@@ -233,8 +235,6 @@ private:
 
 	QByteArray _tmpPassword;
 	TimeId _tmpPasswordValidUntil = 0;
-
-	rpl::event_stream<Ui::ColorIndicesCompressed> _colorIndicesChanges;
 
 	rpl::lifetime _lifetime;
 

@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum_topic.h"
 #include "data/data_forum.h"
 #include "main/main_session.h"
+#include "window/window_peer_menu.h"
 #include "styles/style_info.h"
 #include "styles/style_profile.h"
 #include "styles/style_layers.h"
@@ -203,13 +204,25 @@ void ContentWidget::applyAdditionalScroll(int additionalScroll) {
 	}
 }
 
+void ContentWidget::applyMaxVisibleHeight(int maxVisibleHeight) {
+	if (_maxVisibleHeight != maxVisibleHeight) {
+		_maxVisibleHeight = maxVisibleHeight;
+		update();
+	}
+}
+
 rpl::producer<int> ContentWidget::desiredHeightValue() const {
 	using namespace rpl::mappers;
 	return rpl::combine(
 		_innerWrap->entity()->desiredHeightValue(),
 		_scrollTopSkip.value(),
 		_scrollBottomSkip.value()
-	) | rpl::map(_1 + _2 + _3);
+	//) | rpl::map(_1 + _2 + _3);
+	) | rpl::map([=](int desired, int, int) {
+		return desired
+			+ _scrollTopSkip.current()
+			+ _scrollBottomSkip.current();
+	});
 }
 
 rpl::producer<bool> ContentWidget::desiredShadowVisibility() const {
@@ -254,6 +267,24 @@ bool ContentWidget::floatPlayerHandleWheelEvent(QEvent *e) {
 
 QRect ContentWidget::floatPlayerAvailableRect() const {
 	return mapToGlobal(_scroll->geometry());
+}
+
+void ContentWidget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
+	const auto peer = _controller->key().peer();
+	const auto topic = _controller->key().topic();
+	if (!peer && !topic) {
+		return;
+	}
+
+	Window::FillDialogsEntryMenu(
+		_controller->parentController(),
+		Dialogs::EntryState{
+			.key = (topic
+				? Dialogs::Key{ topic }
+				: Dialogs::Key{ peer->owner().history(peer) }),
+			.section = Dialogs::EntryState::Section::Profile,
+		},
+		addAction);
 }
 
 rpl::producer<SelectedItems> ContentWidget::selectedListValue() const {
@@ -328,6 +359,10 @@ rpl::producer<bool> ContentWidget::desiredBottomShadowVisibility() const {
 	});
 }
 
+not_null<Ui::ScrollArea*> ContentWidget::scroll() const {
+	return _scroll.data();
+}
+
 Key ContentMemento::key() const {
 	if (const auto topic = this->topic()) {
 		return Key(topic);
@@ -340,7 +375,11 @@ Key ContentMemento::key() const {
 	} else if (const auto peer = storiesPeer()) {
 		return Stories::Tag{ peer, storiesTab() };
 	} else if (const auto peer = statisticsPeer()) {
-		return Statistics::Tag{ peer, statisticsContextId() };
+		return Statistics::Tag{
+			peer,
+			statisticsContextId(),
+			statisticsStoryId(),
+		};
 	} else {
 		return Downloads::Tag();
 	}
@@ -379,7 +418,8 @@ ContentMemento::ContentMemento(Stories::Tag stories)
 
 ContentMemento::ContentMemento(Statistics::Tag statistics)
 : _statisticsPeer(statistics.peer)
-, _statisticsContextId(statistics.contextId) {
+, _statisticsContextId(statistics.contextId)
+, _statisticsStoryId(statistics.storyId) {
 }
 
 } // namespace Info

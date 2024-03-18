@@ -8,12 +8,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/flags.h"
-#include "boxes/abstract_box.h"
+#include "ui/layers/box_content.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "ui/chat/attach/attach_send_files_way.h"
-#include "ui/widgets/popup_menu.h"
-#include "storage/localimageloader.h"
-#include "storage/storage_media_prepare.h"
 
 namespace style {
 struct ComposeControls;
@@ -53,6 +50,10 @@ namespace SendMenu {
 enum class Type;
 } // namespace SendMenu
 
+namespace HistoryView::Controls {
+class CharactersLimitLabel;
+} // namespace HistoryView::Controls
+
 enum class SendFilesAllow {
 	OnlyOne = (1 << 0),
 	Photos = (1 << 1),
@@ -91,6 +92,7 @@ struct SendFilesBoxDescriptor {
 	std::shared_ptr<ChatHelpers::Show> show;
 	Ui::PreparedList list;
 	TextWithTags caption;
+	PeerData *captionToPeer = nullptr;
 	SendFilesLimits limits = {};
 	SendFilesCheck check;
 	Api::SendType sendType = {};
@@ -111,8 +113,7 @@ public:
 		not_null<Window::SessionController*> controller,
 		Ui::PreparedList &&list,
 		const TextWithTags &caption,
-		SendFilesLimits limits,
-		SendFilesCheck check,
+		not_null<PeerData*> toPeer,
 		Api::SendType sendType,
 		SendMenu::Type sendMenuType);
 	SendFilesBox(QWidget*, SendFilesBoxDescriptor &&descriptor);
@@ -224,6 +225,8 @@ private:
 	void enqueueNextPrepare();
 	void addPreparedAsyncFile(Ui::PreparedFile &&file);
 
+	void checkCharsLimitation();
+
 	const std::shared_ptr<ChatHelpers::Show> _show;
 	const style::ComposeControls &_st;
 	const Api::SendType _sendType = Api::SendType();
@@ -236,7 +239,7 @@ private:
 
 	SendFilesLimits _limits = {};
 	SendMenu::Type _sendMenuType = {};
-
+	PeerData *_captionToPeer = nullptr;
 	SendFilesCheck _check;
 	SendFilesConfirmed _confirmedCallback;
 	Fn<void()> _cancelledCallback;
@@ -247,6 +250,8 @@ private:
 	object_ptr<Ui::EmojiButton> _emojiToggle = { nullptr };
 	base::unique_qptr<ChatHelpers::TabbedPanel> _emojiPanel;
 	base::unique_qptr<QObject> _emojiFilter;
+	using CharactersLimitLabel = HistoryView::Controls::CharactersLimitLabel;
+	base::unique_qptr<CharactersLimitLabel> _charsLimitation;
 
 	object_ptr<Ui::Checkbox> _groupFiles = { nullptr };
 	object_ptr<Ui::Checkbox> _sendImagesAsPhotos = { nullptr };

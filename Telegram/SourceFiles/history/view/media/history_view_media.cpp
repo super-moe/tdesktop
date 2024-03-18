@@ -198,10 +198,6 @@ SelectedQuote Media::selectedQuote(TextSelection selection) const {
 	return {};
 }
 
-bool Media::isDisplayed() const {
-	return true;
-}
-
 QSize Media::countCurrentSize(int newWidth) {
 	return QSize(qMin(newWidth, maxWidth()), minHeight());
 }
@@ -285,7 +281,7 @@ void Media::fillImageSpoiler(
 
 void Media::createSpoilerLink(not_null<MediaSpoiler*> spoiler) {
 	const auto weak = base::make_weak(this);
-	spoiler->link = std::make_shared<LambdaClickHandler>([=](
+	spoiler->link = std::make_shared<LambdaClickHandler>([weak, spoiler](
 			const ClickContext &context) {
 		const auto button = context.button;
 		const auto media = weak.get();
@@ -295,15 +291,15 @@ void Media::createSpoilerLink(not_null<MediaSpoiler*> spoiler) {
 		const auto view = media->parent();
 		spoiler->revealed = true;
 		spoiler->revealAnimation.start([=] {
-			media->history()->owner().requestViewRepaint(view);
+			view->repaint();
 		}, 0., 1., st::fadeWrapDuration);
-		media->history()->owner().requestViewRepaint(view);
+		view->repaint();
 		media->history()->owner().registerShownSpoiler(view);
 	});
 }
 
 void Media::repaint() const {
-	history()->owner().requestViewRepaint(_parent);
+	_parent->repaint();
 }
 
 Ui::Text::String Media::createCaption(not_null<HistoryItem*> item) const {
@@ -345,11 +341,7 @@ auto Media::getBubbleSelectionIntervals(
 }
 
 bool Media::usesBubblePattern(const PaintContext &context) const {
-	return (context.selection != FullSelection)
-		&& _parent->hasOutLayout()
-		&& context.bubblesPattern
-		&& !context.viewport.isEmpty()
-		&& !context.bubblesPattern->pixmap.size().isEmpty();
+	return _parent->usesBubblePattern(context);
 }
 
 PointState Media::pointState(QPoint point) const {

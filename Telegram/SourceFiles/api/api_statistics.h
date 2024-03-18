@@ -68,14 +68,16 @@ private:
 
 class PublicForwards final : public StatisticsRequestSender {
 public:
-	PublicForwards(not_null<ChannelData*> channel, FullMsgId fullId);
+	PublicForwards(
+		not_null<ChannelData*> channel,
+		Data::RecentPostId fullId);
 
 	void request(
 		const Data::PublicForwardsSlice::OffsetToken &token,
 		Fn<void(Data::PublicForwardsSlice)> done);
 
 private:
-	const FullMsgId _fullId;
+	const Data::RecentPostId _fullId;
 	mtpRequestId _requestId = 0;
 	int _lastTotal = 0;
 
@@ -86,6 +88,9 @@ public:
 	explicit MessageStatistics(
 		not_null<ChannelData*> channel,
 		FullMsgId fullId);
+	explicit MessageStatistics(
+		not_null<ChannelData*> channel,
+		FullStoryId storyId);
 
 	void request(Fn<void(Data::MessageStatistics)> done);
 
@@ -94,6 +99,7 @@ public:
 private:
 	PublicForwards _publicForwards;
 	const FullMsgId _fullId;
+	const FullStoryId _storyId;
 
 	Data::PublicForwardsSlice _firstSlice;
 

@@ -21,7 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "boxes/premium_preview_box.h"
 #include "main/main_session.h"
-#include "settings/settings_common.h"
 #include "settings/settings_premium.h"
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
@@ -33,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/vertical_layout.h"
 #include "ui/animated_icon.h"
 #include "ui/painter.h"
+#include "ui/vertical_list.h"
 #include "window/section_widget.h"
 #include "window/window_session_controller.h"
 #include "styles/style_boxes.h"
@@ -64,8 +64,8 @@ PeerId GenerateUser(not_null<History*> history, const QString &name) {
 		MTPEmojiStatus(),
 		MTPVector<MTPUsername>(),
 		MTPint(), // stories_max_id
-		MTP_int(0), // color
-		MTPlong())); // background_emoji_id
+		MTPPeerColor(), // color
+		MTPPeerColor())); // profile_color
 	return peerId;
 }
 
@@ -77,20 +77,15 @@ AdminLog::OwnedItem GenerateItem(
 		const QString &text) {
 	Expects(history->peer->isUser());
 
-	const auto item = history->addNewLocalMessage(
-		history->nextNonHistoryEntryId(),
-		(MessageFlag::FakeHistoryItem
+	const auto item = history->addNewLocalMessage({
+		.id = history->nextNonHistoryEntryId(),
+		.flags = (MessageFlag::FakeHistoryItem
 			| MessageFlag::HasFromId
 			| MessageFlag::HasReplyInfo),
-		UserId(), // via
-		FullReplyTo{ .messageId = replyTo },
-		base::unixtime::now(), // date
-		from,
-		QString(), // postAuthor
-		TextWithEntities{ .text = text },
-		MTP_messageMediaEmpty(),
-		HistoryMessageMarkupData(),
-		uint64(0)); // groupedId
+		.from = from,
+		.replyTo = FullReplyTo{ .messageId = replyTo },
+		.date = base::unixtime::now(),
+	}, TextWithEntities{ .text = text }, MTP_messageMediaEmpty());
 
 	return AdminLog::OwnedItem(delegate, item);
 }
@@ -105,7 +100,7 @@ void AddMessage(
 		object_ptr<Ui::RpWidget>(container),
 		style::margins(
 			0,
-			st::settingsSectionSkip,
+			st::defaultVerticalListSkip,
 			0,
 			st::settingsPrivacySkipTop));
 
@@ -486,7 +481,7 @@ void ReactionsSettingsBox(
 	auto idValue = state->selectedId.value();
 	AddMessage(pinnedToTop, controller, std::move(idValue), box->width());
 
-	Settings::AddSubsectionTitle(
+	Ui::AddSubsectionTitle(
 		pinnedToTop,
 		tr::lng_settings_chat_reactions_subtitle());
 
@@ -507,7 +502,6 @@ void ReactionsSettingsBox(
 	};
 
 	auto firstCheckedButton = (Ui::RpWidget*)(nullptr);
-	const auto premiumPossible = controller->session().premiumPossible();
 	auto list = reactions.list(Data::Reactions::Type::Active);
 	if (const auto favorite = reactions.favorite()) {
 		if (favorite->id.custom()) {
@@ -515,15 +509,10 @@ void ReactionsSettingsBox(
 		}
 	}
 	for (const auto &r : list) {
-		const auto button = Settings::AddButton(
+		const auto button = container->add(object_ptr<Ui::SettingsButton>(
 			container,
 			rpl::single<QString>(base::duplicate(r.title)),
-			st::settingsButton);
-
-		const auto premium = r.premium;
-		if (premium && !premiumPossible) {
-			continue;
-		}
+			st::settingsButton));
 
 		const auto iconSize = st::settingsReactionSize;
 		const auto left = button->st().iconLeft;
@@ -556,12 +545,6 @@ void ReactionsSettingsBox(
 				&button->lifetime());
 		}
 		button->setClickedCallback([=, id = r.id] {
-			if (premium && !controller->session().premium()) {
-				ShowPremiumPreviewBox(
-					controller,
-					PremiumPreview::InfiniteReactions);
-				return;
-			}
 			checkButton(button);
 			state->selectedId = id;
 		});

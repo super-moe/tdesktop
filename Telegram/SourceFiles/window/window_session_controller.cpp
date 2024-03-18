@@ -12,7 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_info_box.h"
 #include "boxes/peers/replace_boost_box.h"
 #include "boxes/delete_messages_box.h"
-#include "window/window_adaptive.h"
 #include "window/window_controller.h"
 #include "window/window_filters_menu.h"
 #include "info/info_memento.h"
@@ -27,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/player/media_player_instance.h"
 #include "media/view/media_view_open_common.h"
 #include "data/data_document_resolver.h"
-#include "data/data_media_types.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
 #include "data/data_folder.h"
@@ -43,23 +41,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_chat_filters.h"
 #include "data/data_replies_list.h"
 #include "data/data_peer_values.h"
-#include "data/data_stories.h"
 #include "passport/passport_form_controller.h"
 #include "chat_helpers/tabbed_selector.h"
 #include "chat_helpers/emoji_interactions.h"
 #include "core/shortcuts.h"
 #include "core/application.h"
-#include "core/core_settings.h"
 #include "core/click_handler_types.h"
 #include "base/unixtime.h"
 #include "ui/controls/userpic_button.h"
-#include "ui/layers/generic_box.h"
 #include "ui/text/text_utilities.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone.
 #include "ui/delayed_activation.h"
 #include "ui/boxes/boost_box.h"
-#include "ui/chat/attach/attach_bot_webview.h"
-#include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/effects/message_sending_animation_controller.h"
 #include "ui/style/style_palette_colorizer.h"
@@ -69,11 +62,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/calendar_box.h"
 #include "ui/boxes/confirm_box.h"
 #include "mainwidget.h"
-#include "mainwindow.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "lang/lang_keys.h"
 #include "apiwrap.h"
 #include "api/api_chat_invite.h"
 #include "api/api_global_privacy.h"
@@ -82,13 +75,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_upload.h"
 #include "window/themes/window_theme.h"
 #include "window/window_peer_menu.h"
+#include "window/window_session_controller_link_info.h"
 #include "settings/settings_main.h"
 #include "settings/settings_premium.h"
 #include "settings/settings_privacy_security.h"
 #include "styles/style_window.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_layers.h" // st::boxLabel
-#include "styles/style_premium.h"
 
 namespace Window {
 namespace {
@@ -321,6 +314,8 @@ void SessionNavigation::showPeerByLink(const PeerByLinkInfo &info) {
 					peer,
 					[=](bool) { showPeerByLinkResolved(peer, info); },
 					true);
+			} else if (info.joinChannel && peer->isChannel()) {
+				peer->session().api().joinChannel(peer->asChannel());
 			} else {
 				showPeerByLinkResolved(peer, info);
 			}
@@ -559,7 +554,7 @@ void SessionNavigation::showPeerByLinkResolved(
 		} else {
 			showPeerInfo(peer, params);
 		}
-	} else if (resolveType == ResolveType::Boost && peer->isBroadcast()) {
+	} else if (resolveType == ResolveType::Boost && peer->isChannel()) {
 		resolveBoostState(peer->asChannel());
 	} else {
 		// Show specific posts only in channels / supergroups.
@@ -630,13 +625,16 @@ void SessionNavigation::resolveBoostState(not_null<ChannelData*> channel) {
 		channel->input
 	)).done([=](const MTPpremium_BoostsStatus &result) {
 		_boostStateResolving = nullptr;
+		channel->updateLevelHint(result.data().vlevel().v);
 		const auto submit = [=](Fn<void(Ui::BoostCounters)> done) {
 			applyBoost(channel, done);
 		};
 		uiShow()->show(Box(Ui::BoostBox, Ui::BoostBoxData{
 			.name = channel->name(),
 			.boost = ParseBoostCounters(result),
+			.features = LookupBoostFeatures(channel),
 			.allowMulti = (BoostsForGift(_session) > 0),
+			.group = channel->isMegagroup(),
 		}, submit));
 	}).fail([=](const MTP::Error &error) {
 		_boostStateResolving = nullptr;
@@ -665,10 +663,12 @@ void SessionNavigation::applyBoost(
 					uiShow()->show(
 						Box(Ui::GiftForBoostsBox, name, receive, again));
 				} else {
-					uiShow()->show(Box(Ui::BoostBoxAlready));
+					uiShow()->show(
+						Box(Ui::BoostBoxAlready, channel->isMegagroup()));
 				}
 			} else if (!_session->premium()) {
-				uiShow()->show(Box(Ui::PremiumForBoostsBox, [=] {
+				const auto group = channel->isMegagroup();
+				uiShow()->show(Box(Ui::PremiumForBoostsBox, group, [=] {
 					const auto id = peerToChannel(channel->id).bare;
 					Settings::ShowPremium(
 						parentController(),
@@ -680,12 +680,16 @@ void SessionNavigation::applyBoost(
 				uiShow()->show(
 					Box(Ui::GiftForBoostsBox, name, receive, again));
 			} else {
-				uiShow()->show(Box(Ui::GiftedNoBoostsBox));
+				uiShow()->show(
+					Box(Ui::GiftedNoBoostsBox, channel->isMegagroup()));
 			}
 			done({});
 		} else {
 			const auto weak = std::make_shared<QPointer<Ui::BoxContent>>();
-			const auto reassign = [=](std::vector<int> slots, int sources) {
+			const auto reassign = [=](
+					std::vector<int> slots,
+					int groups,
+					int channels) {
 				const auto count = int(slots.size());
 				const auto callback = [=](Ui::BoostCounters counters) {
 					if (const auto strong = weak->data()) {
@@ -697,10 +701,14 @@ void SessionNavigation::applyBoost(
 						lt_count,
 						count,
 						lt_channels,
-						tr::lng_boost_reassign_channels(
-							tr::now,
-							lt_count,
-							sources)));
+						(!groups
+							? tr::lng_boost_reassign_channels
+							: !channels
+							? tr::lng_boost_reassign_groups
+							: tr::lng_boost_reassign_mixed)(
+									tr::now,
+									lt_count,
+									groups + channels)));
 				};
 				applyBoostsChecked(
 					channel,
@@ -737,6 +745,7 @@ void SessionNavigation::applyBoostsChecked(
 		_api.request(MTPpremium_GetBoostsStatus(
 			channel->input
 		)).done([=](const MTPpremium_BoostsStatus &result) {
+			channel->updateLevelHint(result.data().vlevel().v);
 			done(ParseBoostCounters(result));
 		}).fail([=](const MTP::Error &error) {
 			showToast(u"Error: "_q + error.type());
@@ -805,7 +814,8 @@ void SessionNavigation::showRepliesForMessage(
 				history,
 				rootId,
 				commentId,
-				params.highlightPart);
+				params.highlightPart,
+				params.highlightPartOffsetHint);
 			memento->setFromTopic(topic);
 			showSection(std::move(memento), params);
 			return;
@@ -980,6 +990,16 @@ void SessionNavigation::showPollResults(
 		FullMsgId contextId,
 		const SectionShow &params) {
 	showSection(std::make_shared<Info::Memento>(poll, contextId), params);
+}
+
+void SessionNavigation::searchInChat(Dialogs::Key inChat) {
+	searchMessages(QString(), inChat);
+}
+
+void SessionNavigation::searchMessages(
+		const QString &query,
+		Dialogs::Key inChat) {
+	parentController()->content()->searchMessages(query, inChat, nullptr);
 }
 
 auto SessionNavigation::showToast(Ui::Toast::Config &&config)
@@ -1222,21 +1242,54 @@ void SessionController::showGiftPremiumBox(UserData *user) {
 	}
 }
 
-void SessionController::init() {
-	if (session().supportMode()) {
-		initSupportMode();
-	}
+void SessionController::showGiftPremiumsBox(const QString &ref) {
+	_giftPremiumValidator.showChoosePeerBox(ref);
 }
 
-void SessionController::initSupportMode() {
-	session().supportHelper().registerWindow(this);
+void SessionController::init() {
+	if (session().supportMode()) {
+		session().supportHelper().registerWindow(this);
+	}
+	setupShortcuts();
+}
 
+void SessionController::setupShortcuts() {
 	Shortcuts::Requests(
 	) | rpl::filter([=] {
-		return (Core::App().activeWindow() == &window());
+		return (Core::App().activeWindow() == &window())
+			&& !isLayerShown()
+			&& !window().locked();
 	}) | rpl::start_with_next([=](not_null<Shortcuts::Request*> request) {
 		using C = Shortcuts::Command;
 
+		const auto app = &Core::App();
+		const auto accountsCount = int(app->domain().accounts().size());
+		auto &&accounts = ranges::views::zip(
+			Shortcuts::kShowAccount,
+			ranges::views::ints(0, accountsCount));
+		for (const auto &[command, index] : accounts) {
+			request->check(command) && request->handle([=] {
+				const auto list = app->domain().orderedAccounts();
+				if (index >= list.size()) {
+					return false;
+				}
+				const auto account = list[index];
+				if (account == &session().account()) {
+					return false;
+				}
+				const auto window = app->separateWindowForAccount(account);
+				if (window) {
+					window->activate();
+				} else {
+					app->domain().maybeActivate(account);
+				}
+				return true;
+			});
+		}
+
+		if (!session().supportMode()) {
+			return;
+		}
 		request->check(C::SupportHistoryBack) && request->handle([=] {
 			return chatEntryHistoryMove(-1);
 		});
@@ -1322,7 +1375,7 @@ void SessionController::activateFirstChatsFilter() {
 bool SessionController::uniqueChatsInSearchResults() const {
 	return session().supportMode()
 		&& !session().settings().supportAllSearchResults()
-		&& !searchInChat.current();
+		&& !_searchInChat.current();
 }
 
 void SessionController::openFolder(not_null<Data::Folder*> folder) {
@@ -1407,8 +1460,10 @@ void SessionController::setupPremiumToast() {
 		session().mtp().requestConfig();
 		return premium;
 	}) | rpl::start_with_next([=] {
-		MainWindowShow(this).showToast(
-			{ tr::lng_premium_success(tr::now) });
+		MainWindowShow(this).showToast({
+			.text = { tr::lng_premium_success(tr::now) },
+			.adaptive = true,
+		});
 	}, _lifetime);
 }
 
@@ -2094,11 +2149,11 @@ void SessionController::clearPassportForm() {
 void SessionController::showChooseReportMessages(
 		not_null<PeerData*> peer,
 		Ui::ReportReason reason,
-		Fn<void(MessageIdsList)> done) {
+		Fn<void(MessageIdsList)> done) const {
 	content()->showChooseReportMessages(peer, reason, std::move(done));
 }
 
-void SessionController::clearChooseReportMessages() {
+void SessionController::clearChooseReportMessages() const {
 	content()->clearChooseReportMessages();
 }
 
@@ -2131,7 +2186,7 @@ void SessionController::showInNewWindow(
 
 void SessionController::toggleChooseChatTheme(
 		not_null<PeerData*> peer,
-		std::optional<bool> show) {
+		std::optional<bool> show) const {
 	content()->toggleChooseChatTheme(peer, show);
 }
 
@@ -2147,7 +2202,7 @@ void SessionController::finishChatThemeEdit(not_null<PeerData*> peer) {
 	}
 }
 
-void SessionController::updateColumnLayout() {
+void SessionController::updateColumnLayout() const {
 	content()->updateColumnLayout();
 }
 
@@ -2750,7 +2805,7 @@ void SessionController::openPeerStories(
 HistoryView::PaintContext SessionController::preparePaintContext(
 		PaintContextArgs &&args) {
 	const auto visibleAreaTopLocal = content()->mapFromGlobal(
-		QPoint(0, args.visibleAreaTopGlobal)).y();
+		args.visibleAreaPositionGlobal).y();
 	const auto viewport = QRect(
 		0,
 		args.visibleAreaTop - visibleAreaTopLocal,
@@ -2771,7 +2826,7 @@ QString SessionController::premiumRef() const {
 	return _premiumRef;
 }
 
-bool SessionController::contentOverlapped(QWidget *w, QPaintEvent *e) {
+bool SessionController::contentOverlapped(QWidget *w, QPaintEvent *e) const {
 	return widget()->contentOverlapped(w, e);
 }
 

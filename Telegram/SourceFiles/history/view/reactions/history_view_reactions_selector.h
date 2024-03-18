@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rp_widget.h"
 
 namespace Data {
+struct Reaction;
 struct ReactionId;
 } // namespace Data
 
@@ -35,9 +36,43 @@ namespace Ui {
 class PopupMenu;
 class ScrollArea;
 class PlainShadow;
+class FlatLabel;
 } // namespace Ui
 
 namespace HistoryView::Reactions {
+
+class UnifiedFactoryOwner final {
+public:
+	using RecentFactory = Fn<std::unique_ptr<Ui::Text::CustomEmoji>(
+		DocumentId,
+		Fn<void()>)>;
+
+	UnifiedFactoryOwner(
+		not_null<Main::Session*> session,
+		const std::vector<Data::Reaction> &reactions,
+		Strip *strip = nullptr);
+
+	[[nodiscard]] const std::vector<DocumentId> &unifiedIdsList() const {
+		return _unifiedIdsList;
+	}
+
+	[[nodiscard]] Data::ReactionId lookupReactionId(
+		DocumentId unifiedId) const;
+
+	[[nodiscard]] RecentFactory factory();
+
+private:
+	const not_null<Main::Session*> _session;
+	Strip *_strip = nullptr;
+
+	std::vector<DocumentId> _unifiedIdsList;
+	base::flat_map<DocumentId, QString> _defaultReactionIds;
+	base::flat_map<DocumentId, int> _defaultReactionInStripMap;
+
+	QPoint _defaultReactionShift;
+	QPoint _stripPaintOneShift;
+
+};
 
 class Selector final : public Ui::RpWidget {
 public:
@@ -46,6 +81,7 @@ public:
 		const style::EmojiPan &st,
 		std::shared_ptr<ChatHelpers::Show> show,
 		const Data::PossibleItemReactionsRef &reactions,
+		TextWithEntities about,
 		IconFactory iconFactory,
 		Fn<void(bool fast)> close,
 		bool child = false);
@@ -57,12 +93,14 @@ public:
 		std::vector<DocumentId> recent,
 		Fn<void(bool fast)> close,
 		bool child = false);
+	~Selector();
 
 	[[nodiscard]] bool useTransparency() const;
 
 	int countWidth(int desiredWidth, int maxWidth);
 	[[nodiscard]] QMargins marginsForShadow() const;
 	[[nodiscard]] int extendTopForCategories() const;
+	[[nodiscard]] int extendTopForCategoriesAndAbout(int width) const;
 	[[nodiscard]] int minimalHeight() const;
 	[[nodiscard]] int countAppearedWidth(float64 progress) const;
 	void setSpecialExpandTopSkip(int skip);
@@ -71,9 +109,6 @@ public:
 
 	[[nodiscard]] rpl::producer<ChosenReaction> chosen() const {
 		return _chosen.events();
-	}
-	[[nodiscard]] rpl::producer<> premiumPromoChosen() const {
-		return _premiumPromoChosen.events();
 	}
 	[[nodiscard]] rpl::producer<> willExpand() const {
 		return _willExpand.events();
@@ -106,6 +141,7 @@ private:
 		const Data::PossibleItemReactionsRef &reactions,
 		ChatHelpers::EmojiListMode mode,
 		std::vector<DocumentId> recent,
+		TextWithEntities about,
 		IconFactory iconFactory,
 		Fn<void(bool fast)> close,
 		bool child);
@@ -146,20 +182,19 @@ private:
 	const std::vector<DocumentId> _recent;
 	const ChatHelpers::EmojiListMode _listMode;
 	Fn<void()> _jumpedToPremium;
-	base::flat_map<DocumentId, int> _defaultReactionInStripMap;
 	Ui::RoundAreaWithShadow _cachedRound;
-	QPoint _defaultReactionShift;
-	QPoint _stripPaintOneShift;
 	std::unique_ptr<Strip> _strip;
+	std::unique_ptr<Ui::FlatLabel> _about;
+	mutable int _aboutExtend = 0;
 
 	rpl::event_stream<ChosenReaction> _chosen;
-	rpl::event_stream<> _premiumPromoChosen;
 	rpl::event_stream<> _willExpand;
 	rpl::event_stream<> _escapes;
 
 	Ui::ScrollArea *_scroll = nullptr;
 	ChatHelpers::EmojiListWidget *_list = nullptr;
 	ChatHelpers::StickersListFooter *_footer = nullptr;
+	std::unique_ptr<UnifiedFactoryOwner> _unifiedFactoryOwner;
 	Ui::PlainShadow *_shadow = nullptr;
 	rpl::variable<int> _shadowTop = 0;
 	rpl::variable<int> _shadowSkip = 0;
@@ -172,10 +207,12 @@ private:
 	QRect _outer;
 	QRect _outerWithBubble;
 	QImage _expandIconCache;
+	QImage _aboutCache;
 	QMargins _padding;
 	int _specialExpandTopSkip = 0;
 	int _collapsedTopSkip = 0;
-	int _size = 0;
+	int _topAddOnExpand = 0;
+	const int _size = 0;
 	int _recentRows = 0;
 	int _columns = 0;
 	int _skipx = 0;
@@ -199,6 +236,7 @@ enum class AttachSelectorResult {
 	Attached,
 };
 
+#if 0 // not ready
 AttachSelectorResult MakeJustSelectorMenu(
 	not_null<Ui::PopupMenu*> menu,
 	not_null<Window::SessionController*> controller,
@@ -206,6 +244,7 @@ AttachSelectorResult MakeJustSelectorMenu(
 	ChatHelpers::EmojiListMode mode,
 	std::vector<DocumentId> recent,
 	Fn<void(ChosenReaction)> chosen);
+#endif
 
 AttachSelectorResult AttachSelectorToMenu(
 	not_null<Ui::PopupMenu*> menu,
@@ -213,7 +252,7 @@ AttachSelectorResult AttachSelectorToMenu(
 	QPoint desiredPosition,
 	not_null<HistoryItem*> item,
 	Fn<void(ChosenReaction)> chosen,
-	Fn<void(FullMsgId)> showPremiumPromo,
+	TextWithEntities about,
 	IconFactory iconFactory);
 
 [[nodiscard]] auto AttachSelectorToMenu(
@@ -222,7 +261,11 @@ AttachSelectorResult AttachSelectorToMenu(
 	const style::EmojiPan &st,
 	std::shared_ptr<ChatHelpers::Show> show,
 	const Data::PossibleItemReactionsRef &reactions,
+	TextWithEntities about,
 	IconFactory iconFactory
 ) -> base::expected<not_null<Selector*>, AttachSelectorResult>;
+
+[[nodiscard]] TextWithEntities ItemReactionsAbout(
+	not_null<HistoryItem*> item);
 
 } // namespace HistoryView::Reactions

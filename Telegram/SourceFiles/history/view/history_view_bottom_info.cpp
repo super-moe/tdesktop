@@ -442,14 +442,17 @@ void BottomInfo::paintReactions(
 }
 
 QSize BottomInfo::countCurrentSize(int newWidth) {
-	if (newWidth >= maxWidth()) {
+	if (newWidth >= maxWidth() || (_data.flags & Data::Flag::Shortcut)) {
 		return optimalSize();
 	}
+	const auto dateHeight = (_data.flags & Data::Flag::Sponsored)
+		? 0
+		: st::msgDateFont->height;
 	const auto noReactionsWidth = maxWidth() - _reactionsMaxWidth;
 	accumulate_min(newWidth, std::max(noReactionsWidth, _reactionsMaxWidth));
 	return QSize(
 		newWidth,
-		st::msgDateFont->height + countReactionsHeight(newWidth));
+		dateHeight + countReactionsHeight(newWidth));
 }
 
 void BottomInfo::layout() {
@@ -478,10 +481,8 @@ void BottomInfo::layoutDateText() {
 	const auto name = _authorElided
 		? st::msgDateFont->elided(author, maxWidth - afterAuthorWidth)
 		: author;
-	const auto full = (_data.flags & Data::Flag::Recommended)
-		? tr::lng_recommended(tr::now)
-		: (_data.flags & Data::Flag::Sponsored)
-		? tr::lng_sponsored(tr::now)
+	const auto full = (_data.flags & Data::Flag::Sponsored)
+		? QString()
 		: (_data.flags & Data::Flag::Imported)
 		? (date + ' ' + tr::lng_imported(tr::now))
 		: name.isEmpty()
@@ -508,7 +509,8 @@ void BottomInfo::layoutRepliesText() {
 	if (!_data.replies
 		|| !*_data.replies
 		|| (_data.flags & Data::Flag::RepliesContext)
-		|| (_data.flags & Data::Flag::Sending)) {
+		|| (_data.flags & Data::Flag::Sending)
+		|| (_data.flags & Data::Flag::Shortcut)) {
 		_replies.clear();
 		return;
 	}
@@ -548,6 +550,9 @@ void BottomInfo::layoutReactionsText() {
 }
 
 QSize BottomInfo::countOptimalSize() {
+	if (_data.flags & Data::Flag::Shortcut) {
+		return { st::historyShortcutStateSpace, st::msgDateFont->height };
+	}
 	auto width = 0;
 	if (_data.flags & (Data::Flag::OutLayout | Data::Flag::Sending)) {
 		width += st::historySendStateSpace;
@@ -568,7 +573,10 @@ QSize BottomInfo::countOptimalSize() {
 	}
 	_reactionsMaxWidth = countReactionsMaxWidth();
 	width += _reactionsMaxWidth;
-	return QSize(width, st::msgDateFont->height);
+	const auto dateHeight = (_data.flags & Data::Flag::Sponsored)
+		? 0
+		: st::msgDateFont->height;
+	return QSize(width, dateHeight);
 }
 
 BottomInfo::Reaction BottomInfo::prepareReactionWithId(
@@ -644,14 +652,14 @@ BottomInfo::Data BottomInfoDataFromMessage(not_null<Message*> message) {
 	if (message->context() == Context::Replies) {
 		result.flags |= Flag::RepliesContext;
 	}
-	if (const auto sponsored = item->Get<HistoryMessageSponsored>()) {
-		if (sponsored->recommended) {
-			result.flags |= Flag::Recommended;
-		}
+	if (item->isSponsored()) {
 		result.flags |= Flag::Sponsored;
 	}
 	if (item->isPinned() && message->context() != Context::Pinned) {
 		result.flags |= Flag::Pinned;
+	}
+	if (message->context() == Context::ShortcutMessages) {
+		result.flags |= Flag::Shortcut;
 	}
 	if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
 		 if (!msgsigned->isAnonymousRank) {

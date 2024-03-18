@@ -47,6 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_group_call.h" // GroupCall::input.
 #include "data/data_chat_filters.h"
 #include "data/data_folder.h"
+#include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_stories.h"
 #include "data/data_channel.h"
@@ -57,6 +58,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_send_action.h"
 #include "chat_helpers/emoji_interactions.h"
 #include "base/unixtime.h"
+#include "base/event_filter.h"
 #include "support/support_helper.h"
 #include "apiwrap.h"
 #include "api/api_chat_participants.h"
@@ -65,6 +67,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 #include "styles/style_info.h"
 #include "styles/style_menu_icons.h"
+
+#include <QtGui/QWindow>
 
 namespace HistoryView {
 namespace {
@@ -75,6 +79,19 @@ inline bool HasGroupCallMenu(const not_null<PeerData*> &peer) {
 	return !peer->groupCall()
 		&& ((peer->isChannel() && peer->asChannel()->amCreator())
 			|| (peer->isChat() && peer->asChat()->amCreator()));
+}
+
+QString TopBarNameText(
+		not_null<PeerData*> peer,
+		Dialogs::EntryState::Section section) {
+	if (section == Dialogs::EntryState::Section::SavedSublist) {
+		if (peer->isSelf()) {
+			return tr::lng_my_notes(tr::now);
+		} else if (peer->isSavedHiddenAuthor()) {
+			return tr::lng_hidden_author_messages(tr::now);
+		}
+	}
+	return peer->topBarNameText();
 }
 
 } // namespace
@@ -157,7 +174,7 @@ TopBarWidget::TopBarWidget(
 
 	rpl::combine(
 		_controller->activeChatValue(),
-		_controller->searchInChat.value()
+		_controller->searchInChatValue()
 	) | rpl::combine_previous(
 		std::make_tuple(Dialogs::Key(), Dialogs::Key())
 	) | rpl::map([](
@@ -240,6 +257,16 @@ TopBarWidget::TopBarWidget(
 		updateConnectingState();
 	}, lifetime());
 
+	base::install_event_filter(
+		this,
+		window()->windowHandle(),
+		[=](not_null<QEvent*> e) {
+			if (e->type() == QEvent::Expose) {
+				updateConnectingState();
+			}
+			return base::EventFilterResult::Continue;
+		});
+
 	setCursor(style::cur_pointer);
 }
 
@@ -251,7 +278,8 @@ Main::Session &TopBarWidget::session() const {
 
 void TopBarWidget::updateConnectingState() {
 	const auto state = _controller->session().mtp().dcstate();
-	if (state == MTP::ConnectedState) {
+	const auto exposed = window()->windowHandle()->isExposed();
+	if (state == MTP::ConnectedState || !exposed) {
 		if (_connecting) {
 			_connecting = nullptr;
 			update();
@@ -491,9 +519,17 @@ void TopBarWidget::paintTopBar(Painter &p) {
 	}
 
 	const auto now = crl::now();
-	const auto history = _activeChat.key.owningHistory();
+	const auto peer = _activeChat.key.owningHistory()
+		? _activeChat.key.owningHistory()->peer.get()
+		: nullptr;
 	const auto folder = _activeChat.key.folder();
+	const auto sublist = _activeChat.key.sublist();
 	const auto topic = _activeChat.key.topic();
+	const auto history = _activeChat.key.history();
+	const auto namePeer = history
+		? history->peer.get()
+		: sublist ? sublist->peer().get()
+		: nullptr;
 	if (topic && _activeChat.section == Section::Replies) {
 		p.setPen(st::dialogsNameFg);
 		topic->chatListNameText().drawElided(
@@ -516,22 +552,22 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			p.drawTextLeft(nameleft, statustop, width(), _customTitleText);
 		}
 	} else if (folder
-		|| history->peer->sharedMediaInfo()
+		|| (peer && peer->sharedMediaInfo())
 		|| (_activeChat.section == Section::Scheduled)
 		|| (_activeChat.section == Section::Pinned)) {
 		auto text = (_activeChat.section == Section::Scheduled)
-			? ((history && history->peer->isSelf())
+			? ((peer && peer->isSelf())
 				? tr::lng_reminder_messages(tr::now)
 				: tr::lng_scheduled_messages(tr::now))
 			: (_activeChat.section == Section::Pinned)
 			? _customTitleText
 			: folder
 			? folder->chatListName()
-			: history->peer->isSelf()
+			: peer->isSelf()
 			? tr::lng_saved_messages(tr::now)
-			: history->peer->isRepliesChat()
+			: peer->isRepliesChat()
 			? tr::lng_replies_messages(tr::now)
-			: history->peer->name();
+			: peer->name();
 		const auto textWidth = st::historySavedFont->width(text);
 		if (availableWidth < textWidth) {
 			text = st::historySavedFont->elided(text, availableWidth);
@@ -562,16 +598,14 @@ void TopBarWidget::paintTopBar(Painter &p) {
 				width(),
 				st::historyStatusFgTyping,
 				now)) {
-			p.setPen(st::historyStatusFg);
-			p.drawTextLeft(nameleft, statustop, width(), _customTitleText);
+			paintStatus(p, nameleft, statustop, availableWidth, width());
 		}
-	} else if (const auto history = _activeChat.key.history()) {
-		const auto peer = history->peer;
-		if (_titleNameVersion < peer->nameVersion()) {
-			_titleNameVersion = peer->nameVersion();
+	} else if (namePeer) {
+		if (_titleNameVersion < namePeer->nameVersion()) {
+			_titleNameVersion = namePeer->nameVersion();
 			_title.setText(
 				st::msgNameStyle,
-				peer->topBarNameText(),
+				TopBarNameText(namePeer, _activeChat.section),
 				Ui::NameTextOptions());
 		}
 		const auto badgeWidth = _titleBadge.drawGetWidth(
@@ -584,7 +618,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			_title.maxWidth(),
 			width(),
 			{
-				.peer = peer,
+				.peer = namePeer,
 				.verified = &st::dialogsVerifiedIcon,
 				.premium = &st::dialogsPremiumIcon.icon,
 				.scam = &st::attentionButtonFg,
@@ -626,6 +660,9 @@ bool TopBarWidget::paintSendAction(
 		int outerWidth,
 		style::color fg,
 		crl::time now) {
+	if (!_sendAction) {
+		return false;
+	}
 	const auto seen = _emojiInteractionSeen.get();
 	if (!seen || seen->till <= now) {
 		return _sendAction->paint(p, x, y, availableWidth, outerWidth, fg, now);
@@ -676,10 +713,22 @@ void TopBarWidget::paintStatus(
 		int top,
 		int availableWidth,
 		int outerWidth) {
-	p.setPen(_titlePeerTextOnline
-		? st::historyStatusFgActive
-		: st::historyStatusFg);
-	_titlePeerText.drawLeftElided(p, left, top, availableWidth, outerWidth);
+	using Section = Dialogs::EntryState::Section;
+	const auto section = _activeChat.section;
+	if (section == Section::Replies || section == Section::SavedSublist) {
+		p.setPen(st::historyStatusFg);
+		p.drawTextLeft(left, top, outerWidth, _customTitleText);
+	} else {
+		p.setPen(_titlePeerTextOnline
+			? st::historyStatusFgActive
+			: st::historyStatusFg);
+		_titlePeerText.drawLeftElided(
+			p,
+			left,
+			top,
+			availableWidth,
+			outerWidth);
+	}
 }
 
 QRect TopBarWidget::getMembersShowAreaGeometry() const {
@@ -713,11 +762,15 @@ void TopBarWidget::infoClicked() {
 		return;
 	} else if (const auto topic = key.topic()) {
 		_controller->showSection(std::make_shared<Info::Memento>(topic));
-	} else if (key.peer()->isSelf()) {
+	} else if (const auto sublist = key.sublist()) {
+		_controller->showSection(std::make_shared<Info::Memento>(
+			_controller->session().user(),
+			Info::Section(Storage::SharedMediaType::Photo)));
+	} else if (key.peer()->savedSublistsInfo()) {
 		_controller->showSection(std::make_shared<Info::Memento>(
 			key.peer(),
-			Info::Section(Storage::SharedMediaType::Photo)));
-	} else if (key.peer()->isRepliesChat()) {
+			Info::Section::Type::SavedSublists));
+	} else if (key.peer()->sharedMediaInfo()) {
 		_controller->showSection(std::make_shared<Info::Memento>(
 			key.peer(),
 			Info::Section(Storage::SharedMediaType::Photo)));
@@ -905,7 +958,9 @@ int TopBarWidget::countSelectedButtonsTop(float64 selectedShown) {
 void TopBarWidget::updateSearchVisibility() {
 	const auto searchAllowedMode = (_activeChat.section == Section::History)
 		|| (_activeChat.section == Section::Replies
-			&& _activeChat.key.topic());
+			&& _activeChat.key.topic())
+		|| (_activeChat.section == Section::SavedSublist
+			&& _activeChat.key.sublist());
 	_search->setVisible(searchAllowedMode && !_chooseForReportReason);
 }
 
@@ -1679,7 +1734,7 @@ void TopBarWidget::updateOnlineDisplay() {
 			auto online = 0;
 			auto onlyMe = true;
 			for (const auto &user : chat->participants) {
-				if (user->onlineTill > now) {
+				if (user->lastseen().isOnline(now)) {
 					++online;
 					if (onlyMe && user != self) onlyMe = false;
 				}
@@ -1700,9 +1755,10 @@ void TopBarWidget::updateOnlineDisplay() {
 			if (GetEnhancedBool("hide_counter")) {
 				text = tr::lng_chat_status_members(tr::now, lt_count_decimal, channel->membersCount());
 			} else {
+				QMutexLocker locker(&reqMutex);
 				if (!isTopic && lastChatRequest[QString::number(channel->id.value)].requestTime + 60 < now) { // Update every 60 seconds
 					delayUpdate = true;
-					session().api().request(MTPmessages_GetOnlines(
+					_controller->session().api().request(MTPmessages_GetOnlines(
 							channel->input
 					)).done([=](const MTPChatOnlines &result) {
 						const auto count = result.c_chatOnlines().vonlines().v;

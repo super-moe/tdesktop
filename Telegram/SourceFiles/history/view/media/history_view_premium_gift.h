@@ -28,7 +28,7 @@ public:
 	QSize size() override;
 	QString title() override;
 	TextWithEntities subtitle() override;
-	QString button() override;
+	rpl::producer<QString> button() override;
 	int buttonSkip() override;
 	void draw(
 		Painter &p,
@@ -46,6 +46,9 @@ public:
 	void unloadHeavyPart() override;
 
 private:
+	[[nodiscard]] bool incomingGift() const;
+	[[nodiscard]] bool outgoingGift() const;
+	[[nodiscard]] bool gift() const;
 	void ensureStickerCreated() const;
 
 	const not_null<Element*> _parent;

@@ -17,13 +17,13 @@ namespace Data {
 class DocumentMedia;
 } // namespace Data
 
-namespace Ui {
-namespace Text {
+namespace Ui::Text {
 class String;
-} // namespace Text
-} // namespace Ui
+} // namespace Ui::Text
 
 namespace HistoryView {
+
+using TtlPaintCallback = Fn<void(QPainter&, QRect, QColor)>;
 
 class Document final
 	: public File
@@ -48,8 +48,7 @@ public:
 	TextForMimeData selectedText(TextSelection selection) const override;
 	SelectedQuote selectedQuote(TextSelection selection) const override;
 	TextSelection selectionFromQuote(
-		not_null<HistoryItem*> item,
-		const TextWithEntities &quote) const override;
+		const SelectedQuote &quote) const override;
 
 	bool uploading() const override;
 
@@ -100,11 +99,6 @@ protected:
 	bool dataLoaded() const override;
 
 private:
-	struct StateFromPlayback {
-		int64 statusSize = 0;
-		bool showPause = false;
-		TimeId realDuration = 0;
-	};
 	enum class LayoutMode {
 		Full,
 		Grouped,
@@ -138,11 +132,6 @@ private:
 		not_null<const HistoryDocumentThumbed*> thumbed,
 		int size,
 		Ui::BubbleRounding rounding) const;
-	void fillThumbnailOverlay(
-		QPainter &p,
-		QRect rect,
-		Ui::BubbleRounding rounding,
-		const PaintContext &context) const;
 
 	void setStatusSize(int64 newSize, TimeId realDuration = 0) const;
 	bool updateStatusText() const; // returns showPause
@@ -179,6 +168,8 @@ private:
 
 	mutable TooltipFilename _tooltipFilename;
 
+	TtlPaintCallback _drawTtl;
+
 	bool _transcribedRound = false;
 
 };
@@ -188,6 +179,8 @@ bool DrawThumbnailAsSongCover(
 	const style::color &colored,
 	const std::shared_ptr<Data::DocumentMedia> &dataMedia,
 	const QRect &rect,
-	const bool selected = false);
+	bool selected = false);
+
+rpl::producer<> TTLVoiceStops(FullMsgId fullId);
 
 } // namespace HistoryView

@@ -11,7 +11,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/object_ptr.h"
 #include "core/core_settings.h"
-#include "base/required.h"
 
 namespace Main {
 class Session;
@@ -53,6 +52,8 @@ struct CounterLayerArgs {
 	required<style::color> bg;
 	required<style::color> fg;
 };
+
+extern const char kOptionNewWindowsSizeAsFirst[];
 
 [[nodiscard]] QImage GenerateCounterLayer(CounterLayerArgs &&args);
 [[nodiscard]] QImage WithSmallCounter(QImage image, CounterLayerArgs &&args);
@@ -131,6 +132,7 @@ public:
 	void recountGeometryConstraints();
 	virtual void updateControlsGeometry();
 
+	void firstShow();
 	bool minimizeToTray();
 	void updateGlobalMenu() {
 		updateGlobalMenuHook();
@@ -196,7 +198,6 @@ private:
 	[[nodiscard]] Core::WindowPosition nextInitialChildPosition(
 		bool primary);
 	[[nodiscard]] QRect countInitialGeometry(Core::WindowPosition position);
-	void initGeometry();
 
 	bool computeIsActive() const;
 

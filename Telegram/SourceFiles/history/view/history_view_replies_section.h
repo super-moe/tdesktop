@@ -152,6 +152,9 @@ public:
 	void listSendBotCommand(
 		const QString &command,
 		const FullMsgId &context) override;
+	void listSearch(
+		const QString &query,
+		const FullMsgId &context) override;
 	void listHandleViaClick(not_null<UserData*> bot) override;
 	not_null<Ui::ChatTheme*> listChatTheme() override;
 	CopyRestrictionType listCopyRestrictionType(HistoryItem *item) override;
@@ -377,14 +380,14 @@ private:
 
 };
 
-
 class RepliesMemento final : public Window::SectionMemento {
 public:
 	RepliesMemento(
 		not_null<History*> history,
 		MsgId rootId,
 		MsgId highlightId = 0,
-		const TextWithEntities &highlightPart = {});
+		const TextWithEntities &highlightPart = {},
+		int highlightPartOffsetHint = 0);
 	explicit RepliesMemento(
 		not_null<HistoryItem*> commentsItem,
 		MsgId commentId = 0);
@@ -434,14 +437,18 @@ public:
 	[[nodiscard]] const TextWithEntities &highlightPart() const {
 		return _highlightPart;
 	}
+	[[nodiscard]] int highlightPartOffsetHint() const {
+		return _highlightPartOffsetHint;
+	}
 
 private:
 	void setupTopicViewer();
 
 	const not_null<History*> _history;
 	MsgId _rootId = 0;
-	const MsgId _highlightId = 0;
 	const TextWithEntities _highlightPart;
+	const int _highlightPartOffsetHint = 0;
+	const MsgId _highlightId = 0;
 	ListMemento _list;
 	std::shared_ptr<Data::RepliesList> _replies;
 	QVector<FullMsgId> _replyReturns;

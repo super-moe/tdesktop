@@ -8,14 +8,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "storage/storage_databases.h"
-#include "dialogs/dialogs_key.h"
-#include "dialogs/dialogs_indexed_list.h"
 #include "dialogs/dialogs_main_list.h"
 #include "data/data_groups.h"
 #include "data/data_cloud_file.h"
 #include "history/history_location_manager.h"
 #include "base/timer.h"
-#include "base/flags.h"
 
 class Image;
 class HistoryItem;
@@ -41,12 +38,17 @@ namespace Passport {
 struct SavedCredentials;
 } // namespace Passport
 
+namespace Iv {
+class Data;
+} // namespace Iv
+
 namespace Data {
 
 class Folder;
 class LocationPoint;
 class WallPaper;
 class ScheduledMessages;
+class ShortcutMessages;
 class SendActionManager;
 class SponsoredMessages;
 class Reactions;
@@ -64,6 +66,10 @@ class GroupCall;
 class NotifySettings;
 class CustomEmojiManager;
 class Stories;
+class SavedMessages;
+class Chatbots;
+class BusinessInfo;
+struct ReactionId;
 
 struct RepliesReadTillUpdate {
 	FullMsgId id;
@@ -100,6 +106,9 @@ public:
 	}
 	[[nodiscard]] ScheduledMessages &scheduledMessages() const {
 		return *_scheduledMessages;
+	}
+	[[nodiscard]] ShortcutMessages &shortcutMessages() const {
+		return *_shortcutMessages;
 	}
 	[[nodiscard]] SendActionManager &sendActionManager() const {
 		return *_sendActionManager;
@@ -139,6 +148,15 @@ public:
 	}
 	[[nodiscard]] Stories &stories() const {
 		return *_stories;
+	}
+	[[nodiscard]] SavedMessages &savedMessages() const {
+		return *_savedMessages;
+	}
+	[[nodiscard]] Chatbots &chatbots() const {
+		return *_chatbots;
+	}
+	[[nodiscard]] BusinessInfo &businessInfo() const {
+		return *_businessInfo;
 	}
 
 	[[nodiscard]] MsgId nextNonHistoryEntryId() {
@@ -348,25 +366,32 @@ public:
 		const QVector<MTPDialog> &dialogs,
 		std::optional<int> count = std::nullopt);
 
-	[[nodiscard]] bool pinnedCanPin(not_null<Thread*> thread) const;
+	[[nodiscard]] bool pinnedCanPin(not_null<Dialogs::Entry*> entry) const;
 	[[nodiscard]] bool pinnedCanPin(
 		FilterId filterId,
 		not_null<History*> history) const;
 	[[nodiscard]] int pinnedChatsLimit(Folder *folder) const;
 	[[nodiscard]] int pinnedChatsLimit(FilterId filterId) const;
 	[[nodiscard]] int pinnedChatsLimit(not_null<Forum*> forum) const;
+	[[nodiscard]] int pinnedChatsLimit(
+		not_null<SavedMessages*> saved) const;
 	[[nodiscard]] rpl::producer<int> maxPinnedChatsLimitValue(
 		Folder *folder) const;
 	[[nodiscard]] rpl::producer<int> maxPinnedChatsLimitValue(
 		FilterId filterId) const;
 	[[nodiscard]] rpl::producer<int> maxPinnedChatsLimitValue(
 		not_null<Forum*> forum) const;
+	[[nodiscard]] rpl::producer<int> maxPinnedChatsLimitValue(
+		not_null<SavedMessages*> saved) const;
+	[[nodiscard]] int groupFreeTranscribeLevel() const;
 	[[nodiscard]] const std::vector<Dialogs::Key> &pinnedChatsOrder(
 		Folder *folder) const;
 	[[nodiscard]] const std::vector<Dialogs::Key> &pinnedChatsOrder(
 		not_null<Forum*> forum) const;
 	[[nodiscard]] const std::vector<Dialogs::Key> &pinnedChatsOrder(
 		FilterId filterId) const;
+	[[nodiscard]] const std::vector<Dialogs::Key> &pinnedChatsOrder(
+		not_null<Data::SavedMessages*> saved) const;
 	void setChatPinned(Dialogs::Key key, FilterId filterId, bool pinned);
 	void setPinnedFromEntryList(Dialogs::Key key, bool pinned);
 	void clearPinnedChats(Folder *folder);
@@ -560,6 +585,7 @@ public:
 		PhotoData *photo,
 		DocumentData *document,
 		WebPageCollage &&collage,
+		std::unique_ptr<Iv::Data> iv,
 		int duration,
 		const QString &author,
 		bool hasLargeMedia,
@@ -727,11 +753,18 @@ public:
 	void webViewResultSent(WebViewResultSent &&sent);
 	[[nodiscard]] rpl::producer<WebViewResultSent> webViewResultSent() const;
 
+	void saveViewAsMessages(not_null<Forum*> forum, bool viewAsMessages);
+
 	[[nodiscard]] auto peerDecorationsUpdated() const
 		-> rpl::producer<not_null<PeerData*>>;
 
 	void applyStatsDcId(not_null<ChannelData*>, MTP::DcId);
 	[[nodiscard]] MTP::DcId statsDcId(not_null<ChannelData*>);
+
+	void viewTagsChanged(
+		not_null<ViewElement*> view,
+		std::vector<ReactionId> &&was,
+		std::vector<ReactionId> &&now);
 
 	void clearLocalStorage();
 
@@ -830,6 +863,7 @@ private:
 		PhotoData *photo,
 		DocumentData *document,
 		WebPageCollage &&collage,
+		std::unique_ptr<Iv::Data> iv,
 		int duration,
 		const QString &author,
 		bool hasLargeMedia,
@@ -872,6 +906,7 @@ private:
 	QPointer<Ui::BoxContent> _exportSuggestion;
 
 	rpl::variable<bool> _contactsLoaded = false;
+	rpl::variable<int> _groupFreeTranscribeLevel;
 	rpl::event_stream<Folder*> _chatsListLoadedEvents;
 	rpl::event_stream<Folder*> _chatsListChanged;
 	rpl::event_stream<not_null<UserData*>> _userIsBotChanges;
@@ -996,9 +1031,14 @@ private:
 
 	base::flat_map<uint64, not_null<GroupCall*>> _groupCalls;
 	rpl::event_stream<InviteToCall> _invitesToCalls;
-	base::flat_map<uint64, base::flat_set<not_null<UserData*>>> _invitedToCallUsers;
+	base::flat_map<
+		uint64,
+		base::flat_set<not_null<UserData*>>> _invitedToCallUsers;
 
 	base::flat_set<not_null<ViewElement*>> _shownSpoilers;
+	base::flat_map<
+		ReactionId,
+		base::flat_set<not_null<ViewElement*>>> _viewsByTag;
 
 	History *_topPromoted = nullptr;
 
@@ -1022,25 +1062,32 @@ private:
 	rpl::event_stream<WebViewResultSent> _webViewResultSent;
 
 	rpl::event_stream<not_null<PeerData*>> _peerDecorationsUpdated;
+	base::flat_map<
+		not_null<ChannelData*>,
+		mtpRequestId> _viewAsMessagesRequests;
 
 	Groups _groups;
 	const std::unique_ptr<ChatFilters> _chatsFilters;
-	std::unique_ptr<ScheduledMessages> _scheduledMessages;
 	const std::unique_ptr<CloudThemes> _cloudThemes;
 	const std::unique_ptr<SendActionManager> _sendActionManager;
 	const std::unique_ptr<Streaming> _streaming;
 	const std::unique_ptr<MediaRotation> _mediaRotation;
 	const std::unique_ptr<Histories> _histories;
 	const std::unique_ptr<Stickers> _stickers;
-	std::unique_ptr<SponsoredMessages> _sponsoredMessages;
 	const std::unique_ptr<Reactions> _reactions;
 	const std::unique_ptr<EmojiStatuses> _emojiStatuses;
 	const std::unique_ptr<ForumIcons> _forumIcons;
 	const std::unique_ptr<NotifySettings> _notifySettings;
 	const std::unique_ptr<CustomEmojiManager> _customEmojiManager;
 	const std::unique_ptr<Stories> _stories;
+	const std::unique_ptr<SavedMessages> _savedMessages;
+	const std::unique_ptr<Chatbots> _chatbots;
+	const std::unique_ptr<BusinessInfo> _businessInfo;
+	std::unique_ptr<ScheduledMessages> _scheduledMessages;
+	std::unique_ptr<ShortcutMessages> _shortcutMessages;
+	std::unique_ptr<SponsoredMessages> _sponsoredMessages;
 
-	MsgId _nonHistoryEntryId = ServerMaxMsgId.bare + ScheduledMsgIdsRange;
+	MsgId _nonHistoryEntryId = ShortcutMaxMsgId;
 
 	rpl::lifetime _lifetime;
 

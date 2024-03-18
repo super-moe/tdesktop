@@ -9,22 +9,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_statistics.h"
 #include "boxes/peer_list_controllers.h"
-#include "data/data_boosts.h"
 #include "data/data_channel.h"
 #include "data/data_session.h"
+#include "data/data_stories.h"
 #include "data/data_user.h"
 #include "history/history_item.h"
 #include "info/boosts/giveaway/boost_badge.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
-#include "settings/settings_common.h"
+#include "ui/effects/outline_segments.h" // Ui::UnreadStoryOutlineGradient.
 #include "ui/effects/toggle_arrow.h"
-#include "ui/empty_userpic.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
+#include "ui/vertical_list.h"
 #include "ui/widgets/buttons.h"
+#include "ui/widgets/popup_menu.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+#include "styles/style_dialogs.h" // dialogsStoriesFull.
+#include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
 #include "styles/style_statistics.h"
 #include "styles/style_window.h"
@@ -57,11 +60,11 @@ void AddArrow(not_null<Ui::RpWidget*> parent) {
 	arrow->show();
 }
 
-void AddSubsectionTitle(
+void AddSubtitle(
 		not_null<Ui::VerticalLayout*> container,
 		rpl::producer<QString> title) {
 	const auto &subtitlePadding = st::settingsButton.padding;
-	::Settings::AddSubsectionTitle(
+	Ui::AddSubsectionTitle(
 		container,
 		std::move(title),
 		{ 0, -subtitlePadding.top(), 0, -subtitlePadding.bottom() });
@@ -91,11 +94,11 @@ void AddSubsectionTitle(
 	return resultText;
 }
 
-struct Descriptor final {
+struct PublicForwardsDescriptor final {
 	Data::PublicForwardsSlice firstSlice;
-	Fn<void(FullMsgId)> showPeerHistory;
+	Fn<void(Data::RecentPostId)> requestShow;
 	not_null<PeerData*> peer;
-	FullMsgId contextId;
+	Data::RecentPostId contextId;
 };
 
 struct MembersDescriptor final {
@@ -110,24 +113,62 @@ struct BoostsDescriptor final {
 	not_null<PeerData*> peer;
 };
 
-class PeerListRowWithMsgId : public PeerListRow {
+class PeerListRowWithFullId : public PeerListRow {
 public:
-	using PeerListRow::PeerListRow;
+	PeerListRowWithFullId(
+		not_null<PeerData*> peer,
+		Data::RecentPostId contextId);
 
-	void setMsgId(MsgId msgId);
-	[[nodiscard]] MsgId msgId() const;
+	[[nodiscard]] PaintRoundImageCallback generatePaintUserpicCallback(
+		bool) override;
+
+	[[nodiscard]] Data::RecentPostId contextId() const;
 
 private:
-	MsgId _msgId;
+	const Data::RecentPostId _contextId;
 
 };
 
-void PeerListRowWithMsgId::setMsgId(MsgId msgId) {
-	_msgId = msgId;
+PeerListRowWithFullId::PeerListRowWithFullId(
+	not_null<PeerData*> peer,
+	Data::RecentPostId contextId)
+: PeerListRow(peer)
+, _contextId(contextId) {
 }
 
-MsgId PeerListRowWithMsgId::msgId() const {
-	return _msgId;
+PaintRoundImageCallback PeerListRowWithFullId::generatePaintUserpicCallback(
+		bool forceRound) {
+	if (!_contextId.storyId) {
+		return PeerListRow::generatePaintUserpicCallback(forceRound);
+	}
+	const auto peer = PeerListRow::peer();
+	auto userpic = PeerListRow::ensureUserpicView();
+
+	const auto line = st::dialogsStoriesFull.lineTwice;
+	const auto penWidth = line / 2.;
+	const auto offset = 1.5 * penWidth * 2;
+	return [=](Painter &p, int x, int y, int outerWidth, int size) mutable {
+		const auto rect = QRect(QPoint(x, y), Size(size));
+		peer->paintUserpicLeft(
+			p,
+			userpic,
+			x + offset,
+			y + offset,
+			outerWidth,
+			size - offset * 2);
+		auto hq = PainterHighQualityEnabler(p);
+		auto gradient = Ui::UnreadStoryOutlineGradient();
+		gradient.setStart(rect.topRight());
+		gradient.setFinalStop(rect.bottomLeft());
+
+		p.setPen(QPen(gradient, penWidth));
+		p.setBrush(Qt::NoBrush);
+		p.drawEllipse(rect - Margins(penWidth));
+	};
+}
+
+Data::RecentPostId PeerListRowWithFullId::contextId() const {
+	return _contextId;
 }
 
 class MembersController final : public PeerListController {
@@ -229,19 +270,22 @@ void MembersController::rowClicked(not_null<PeerListRow*> row) {
 
 class PublicForwardsController final : public PeerListController {
 public:
-	explicit PublicForwardsController(Descriptor d);
+	explicit PublicForwardsController(PublicForwardsDescriptor d);
 
 	Main::Session &session() const override;
 	void prepare() override;
 	void rowClicked(not_null<PeerListRow*> row) override;
 	void loadMoreRows() override;
+	base::unique_qptr<Ui::PopupMenu> rowContextMenu(
+		QWidget *parent,
+		not_null<PeerListRow*> row) override;
 
 private:
-	void appendRow(not_null<PeerData*> peer, MsgId msgId);
+	void appendRow(not_null<PeerData*> peer, Data::RecentPostId contextId);
 	void applySlice(const Data::PublicForwardsSlice &slice);
 
 	const not_null<Main::Session*> _session;
-	Fn<void(FullMsgId)> _showPeerHistory;
+	Fn<void(Data::RecentPostId)> _requestShow;
 
 	Api::PublicForwards _api;
 	Data::PublicForwardsSlice _firstSlice;
@@ -251,9 +295,9 @@ private:
 
 };
 
-PublicForwardsController::PublicForwardsController(Descriptor d)
+PublicForwardsController::PublicForwardsController(PublicForwardsDescriptor d)
 : _session(&d.peer->session())
-, _showPeerHistory(std::move(d.showPeerHistory))
+, _requestShow(std::move(d.requestShow))
 , _api(d.peer->asChannel(), d.contextId)
 , _firstSlice(std::move(d.firstSlice)) {
 }
@@ -282,33 +326,69 @@ void PublicForwardsController::applySlice(
 	_apiToken = slice.token;
 
 	for (const auto &item : slice.list) {
-		if (const auto peer = session().data().peerLoaded(item.peer)) {
-			appendRow(peer, item.msg);
+		if (const auto &full = item.messageId) {
+			if (const auto peer = session().data().peerLoaded(full.peer)) {
+				appendRow(peer, item);
+			}
+		} else if (const auto &full = item.storyId) {
+			if (const auto story = session().data().stories().lookup(full)) {
+				appendRow((*story)->peer(), item);
+			}
 		}
 	}
 	delegate()->peerListRefreshRows();
 }
 
 void PublicForwardsController::rowClicked(not_null<PeerListRow*> row) {
-	const auto rowWithMsgId = static_cast<PeerListRowWithMsgId*>(row.get());
-	crl::on_main([=, msgId = rowWithMsgId->msgId(), peer = row->peer()] {
-		_showPeerHistory({ peer->id, msgId });
-	});
+	const auto rowWithId = static_cast<PeerListRowWithFullId*>(row.get());
+	crl::on_main([=, id = rowWithId->contextId()] { _requestShow(id); });
+}
+
+base::unique_qptr<Ui::PopupMenu> PublicForwardsController::rowContextMenu(
+		QWidget *parent,
+		not_null<PeerListRow*> row) {
+	auto menu = base::make_unique_q<Ui::PopupMenu>(
+		parent,
+		st::popupMenuWithIcons);
+	const auto peer = row->peer();
+	const auto text = (peer->isChat() || peer->isMegagroup())
+		? tr::lng_context_view_group(tr::now)
+		: peer->isUser()
+		? tr::lng_context_view_profile(tr::now)
+		: peer->isChannel()
+		? tr::lng_context_view_channel(tr::now)
+		: QString();
+	if (text.isEmpty()) {
+		return nullptr;
+	}
+	menu->addAction(text, crl::guard(parent, [=, peerId = peer->id] {
+		_requestShow({ .messageId = { peerId, MsgId() } });
+	}), peer->isUser() ? &st::menuIconProfile : &st::menuIconInfo);
+	return menu;
 }
 
 void PublicForwardsController::appendRow(
 		not_null<PeerData*> peer,
-		MsgId msgId) {
+		Data::RecentPostId contextId) {
 	if (delegate()->peerListFindRow(peer->id.value)) {
 		return;
 	}
 
-	auto row = std::make_unique<PeerListRowWithMsgId>(peer);
-	row->setMsgId(msgId);
+	auto row = std::make_unique<PeerListRowWithFullId>(peer, contextId);
 
-	const auto members = peer->asChannel()->membersCount();
-	const auto message = peer->owner().message({ peer->id, msgId });
-	const auto views = message ? message->viewsCount() : 0;
+	const auto members = peer->isChannel()
+		? peer->asChannel()->membersCount()
+		: 0;
+	const auto views = [&] {
+		if (contextId.messageId) {
+			const auto message = peer->owner().message(contextId.messageId);
+			return message ? message->viewsCount() : 0;
+		} else if (const auto &id = contextId.storyId) {
+			const auto story = peer->owner().stories().lookup(id);
+			return story ? (*story)->views() : 0;
+		}
+		return 0;
+	}();
 
 	const auto membersText = !members
 		? QString()
@@ -318,7 +398,9 @@ void PublicForwardsController::appendRow(
 	const auto viewsText = views
 		? tr::lng_stats_recent_messages_views({}, lt_count_decimal, views)
 		: QString();
-	const auto resultText = (membersText.isEmpty() || viewsText.isEmpty())
+	const auto resultText = (membersText.isEmpty() && viewsText.isEmpty())
+		? tr::lng_stories_no_views(tr::now)
+		: (membersText.isEmpty() || viewsText.isEmpty())
 		? membersText + viewsText
 		: QString("%1, %2").arg(membersText, viewsText);
 	row->setCustomStatus(resultText);
@@ -615,28 +697,29 @@ rpl::producer<int> BoostsController::totalBoostsValue() const {
 void AddPublicForwards(
 		const Data::PublicForwardsSlice &firstSlice,
 		not_null<Ui::VerticalLayout*> container,
-		Fn<void(FullMsgId)> showPeerHistory,
+		Fn<void(Data::RecentPostId)> requestShow,
 		not_null<PeerData*> peer,
-		FullMsgId contextId) {
+		Data::RecentPostId contextId) {
 	if (!peer->isChannel()) {
 		return;
 	}
 
 	struct State final {
-		State(Descriptor d) : controller(std::move(d)) {
+		State(PublicForwardsDescriptor d) : controller(std::move(d)) {
 		}
 		PeerListContentDelegateSimple delegate;
 		PublicForwardsController controller;
 	};
-	const auto state = container->lifetime().make_state<State>(Descriptor{
+	auto d = PublicForwardsDescriptor{
 		firstSlice,
-		std::move(showPeerHistory),
+		std::move(requestShow),
 		peer,
 		contextId,
-	});
+	};
+	const auto state = container->lifetime().make_state<State>(std::move(d));
 
 	if (const auto total = firstSlice.total; total > 0) {
-		AddSubsectionTitle(
+		AddSubtitle(
 			container,
 			tr::lng_stats_overview_message_public_share(
 				lt_count_decimal,
@@ -683,7 +766,7 @@ void AddMembersList(
 	};
 	const auto state = container->lifetime().make_state<State>(std::move(d));
 
-	AddSubsectionTitle(container, std::move(title));
+	AddSubtitle(container, std::move(title));
 
 	state->delegate.setContent(container->add(
 		object_ptr<PeerListContent>(container, &state->controller)));

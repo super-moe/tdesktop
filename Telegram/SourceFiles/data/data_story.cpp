@@ -81,8 +81,11 @@ using UpdateFlag = StoryUpdate::Flag;
 		}, [](const MTPDgeoPointEmpty &) {
 		});
 	}, [&](const MTPDmediaAreaSuggestedReaction &data) {
+	}, [&](const MTPDmediaAreaChannelPost &data) {
+	}, [&](const MTPDinputMediaAreaChannelPost &data) {
+		LOG(("API Error: Unexpected inputMediaAreaChannelPost from API."));
 	}, [&](const MTPDinputMediaAreaVenue &data) {
-		LOG(("API Error: Unexpected inputMediaAreaVenue in API data."));
+		LOG(("API Error: Unexpected inputMediaAreaVenue from API."));
 	});
 	return result;
 }
@@ -99,10 +102,75 @@ using UpdateFlag = StoryUpdate::Flag;
 			.flipped = data.is_flipped(),
 			.dark = data.is_dark(),
 		});
+	}, [&](const MTPDmediaAreaChannelPost &data) {
+	}, [&](const MTPDinputMediaAreaChannelPost &data) {
+		LOG(("API Error: Unexpected inputMediaAreaChannelPost from API."));
 	}, [&](const MTPDinputMediaAreaVenue &data) {
-		LOG(("API Error: Unexpected inputMediaAreaVenue in API data."));
+		LOG(("API Error: Unexpected inputMediaAreaVenue from API."));
 	});
 	return result;
+}
+
+[[nodiscard]] auto ParseChannelPost(const MTPMediaArea &area)
+-> std::optional<ChannelPost> {
+	auto result = std::optional<ChannelPost>();
+	area.match([&](const MTPDmediaAreaVenue &data) {
+	}, [&](const MTPDmediaAreaGeoPoint &data) {
+	}, [&](const MTPDmediaAreaSuggestedReaction &data) {
+	}, [&](const MTPDmediaAreaChannelPost &data) {
+		result.emplace(ChannelPost{
+			.area = ParseArea(data.vcoordinates()),
+			.itemId = FullMsgId(
+				peerFromChannel(data.vchannel_id()),
+				data.vmsg_id().v),
+		});
+	}, [&](const MTPDinputMediaAreaChannelPost &data) {
+		LOG(("API Error: Unexpected inputMediaAreaChannelPost from API."));
+	}, [&](const MTPDinputMediaAreaVenue &data) {
+		LOG(("API Error: Unexpected inputMediaAreaVenue from API."));
+	});
+	return result;
+}
+
+[[nodiscard]] PeerData *RepostSourcePeer(
+		not_null<Session*> owner,
+		const MTPDstoryItem &data) {
+	if (const auto forwarded = data.vfwd_from()) {
+		if (const auto from = forwarded->data().vfrom()) {
+			return owner->peer(peerFromMTP(*from));
+		}
+	}
+	return nullptr;
+}
+
+[[nodiscard]] QString RepostSourceName(const MTPDstoryItem &data) {
+	if (const auto forwarded = data.vfwd_from()) {
+		return qs(forwarded->data().vfrom_name().value_or_empty());
+	}
+	return {};
+}
+
+[[nodiscard]] StoryId RepostSourceId(const MTPDstoryItem &data) {
+	if (const auto forwarded = data.vfwd_from()) {
+		return forwarded->data().vstory_id().value_or_empty();
+	}
+	return {};
+}
+
+[[nodiscard]] bool RepostModified(const MTPDstoryItem &data) {
+	if (const auto forwarded = data.vfwd_from()) {
+		return forwarded->data().is_modified();
+	}
+	return false;
+}
+
+[[nodiscard]] PeerData *FromPeer(
+		not_null<Session*> owner,
+		const MTPDstoryItem &data) {
+	if (const auto from = data.vfrom_id()) {
+		return owner->peer(peerFromMTP(*from));
+	}
+	return nullptr;
 }
 
 } // namespace
@@ -126,7 +194,7 @@ private:
 	Fn<void(QByteArray)> _done;
 	base::flat_set<int> _requestedOffsets;
 	int64 _full = 0;
-	int  _nextRequestOffset = 0;
+	int _nextRequestOffset = 0;
 	bool _finished = false;
 	bool _failed = false;
 
@@ -139,7 +207,7 @@ StoryPreload::LoadTask::LoadTask(
 : DownloadMtprotoTask(
 	&document->session().downloader(),
 	document->videoPreloadLocation(),
-	FileOriginStory(id.peer, id.story))
+	id)
 , _done(std::move(done))
 , _full(document->size) {
 	const auto prefix = document->videoPreloadPrefix();
@@ -216,8 +284,13 @@ Story::Story(
 	TimeId now)
 : _id(id)
 , _peer(peer)
+, _repostSourcePeer(RepostSourcePeer(&peer->owner(), data))
+, _repostSourceName(RepostSourceName(data))
+, _repostSourceId(RepostSourceId(data))
+, _fromPeer(FromPeer(&peer->owner(), data))
 , _date(data.vdate().v)
-, _expires(data.vexpire_date().v) {
+, _expires(data.vexpire_date().v)
+, _repostModified(RepostModified(data)) {
 	applyFields(std::move(media), data, now, true);
 }
 
@@ -291,15 +364,9 @@ bool Story::hasReplyPreview() const {
 
 Image *Story::replyPreview() const {
 	return v::match(_media.data, [&](not_null<PhotoData*> photo) {
-		return photo->getReplyPreview(
-			Data::FileOriginStory(_peer->id, _id),
-			_peer,
-			false);
+		return photo->getReplyPreview(fullId(), _peer, false);
 	}, [&](not_null<DocumentData*> document) {
-		return document->getReplyPreview(
-			Data::FileOriginStory(_peer->id, _id),
-			_peer,
-			false);
+		return document->getReplyPreview(fullId(), _peer, false);
 	}, [](v::null_t) {
 		return (Image*)nullptr;
 	});
@@ -456,8 +523,20 @@ const StoryViews &Story::viewsList() const {
 	return _views;
 }
 
-int Story::views() const {
+const StoryViews &Story::channelReactionsList() const {
+	return _channelReactions;
+}
+
+int Story::interactions() const {
 	return _views.total;
+}
+
+int Story::views() const {
+	return _views.views;
+}
+
+int Story::forwards() const {
+	return _views.forwards;
 }
 
 int Story::reactions() const {
@@ -468,12 +547,19 @@ void Story::applyViewsSlice(
 		const QString &offset,
 		const StoryViews &slice) {
 	const auto changed = (_views.reactions != slice.reactions)
+		|| (_views.views != slice.views)
+		|| (_views.forwards != slice.forwards)
 		|| (_views.total != slice.total);
 	_views.reactions = slice.reactions;
+	_views.forwards = slice.forwards;
+	_views.views = slice.views;
 	_views.total = slice.total;
 	_views.known = true;
 	if (offset.isEmpty()) {
 		_views = slice;
+		if (!_channelReactions.total) {
+			_channelReactions.total = _views.reactions + _views.forwards;
+		}
 	} else if (_views.nextOffset == offset) {
 		_views.list.insert(
 			end(_views.list),
@@ -487,6 +573,15 @@ void Story::applyViewsSlice(
 					_views.list,
 					Data::ReactionId(),
 					&StoryView::reaction);
+			_views.forwards = _views.total
+				- ranges::count(
+					_views.list,
+					0,
+					[](const StoryView &view) {
+						return view.repostId
+							? view.repostId
+							: view.forwardId.bare;
+					});
 		}
 	}
 	const auto known = int(_views.list.size());
@@ -513,12 +608,43 @@ void Story::applyViewsSlice(
 	}
 }
 
+void Story::applyChannelReactionsSlice(
+		const QString &offset,
+		const StoryViews &slice) {
+	const auto changed = (_channelReactions.reactions != slice.reactions)
+		|| (_channelReactions.total != slice.total);
+	_channelReactions.reactions = slice.reactions;
+	_channelReactions.total = slice.total;
+	_channelReactions.known = true;
+	if (offset.isEmpty()) {
+		_channelReactions = slice;
+	} else if (_channelReactions.nextOffset == offset) {
+		_channelReactions.list.insert(
+			end(_channelReactions.list),
+			begin(slice.list),
+			end(slice.list));
+		_channelReactions.nextOffset = slice.nextOffset;
+		if (_channelReactions.nextOffset.isEmpty()) {
+			_channelReactions.total = int(_channelReactions.list.size());
+		}
+	}
+	if (changed) {
+		_peer->session().changes().storyUpdated(
+			this,
+			UpdateFlag::ViewsChanged);
+	}
+}
+
 const std::vector<StoryLocation> &Story::locations() const {
 	return _locations;
 }
 
 const std::vector<SuggestedReaction> &Story::suggestedReactions() const {
 	return _suggestedReactions;
+}
+
+const std::vector<ChannelPost> &Story::channelPosts() const {
+	return _channelPosts;
 }
 
 void Story::applyChanges(
@@ -533,6 +659,7 @@ Story::ViewsCounts Story::parseViewsCounts(
 		const Data::ReactionId &mine) {
 	auto result = ViewsCounts{
 		.views = data.vviews_count().v,
+		.forwards = data.vforwards_count().value_or_empty(),
 		.reactions = data.vreactions_count().value_or_empty(),
 	};
 	if (const auto list = data.vrecent_viewers()) {
@@ -611,6 +738,7 @@ void Story::applyFields(
 		viewsKnown = true;
 	} else {
 		counts.views = _views.total;
+		counts.forwards = _views.forwards;
 		counts.reactions = _views.reactions;
 		counts.viewers = _recentViewers;
 		for (const auto &suggested : _suggestedReactions) {
@@ -621,9 +749,8 @@ void Story::applyFields(
 	}
 	auto locations = std::vector<StoryLocation>();
 	auto suggestedReactions = std::vector<SuggestedReaction>();
+	auto channelPosts = std::vector<ChannelPost>();
 	if (const auto areas = data.vmedia_areas()) {
-		locations.reserve(areas->v.size());
-		suggestedReactions.reserve(areas->v.size());
 		for (const auto &area : areas->v) {
 			if (const auto location = ParseLocation(area)) {
 				locations.push_back(*location);
@@ -634,6 +761,8 @@ void Story::applyFields(
 					reaction->count = i->second;
 				}
 				suggestedReactions.push_back(*reaction);
+			} else if (auto post = ParseChannelPost(area)) {
+				channelPosts.push_back(*post);
 			}
 		}
 	}
@@ -645,6 +774,7 @@ void Story::applyFields(
 	const auto locationsChanged = (_locations != locations);
 	const auto suggestedReactionsChanged
 		= (_suggestedReactions != suggestedReactions);
+	const auto channelPostsChanged = (_channelPosts != channelPosts);
 	const auto reactionChanged = (_sentReactionId != reaction);
 
 	_out = out;
@@ -667,6 +797,9 @@ void Story::applyFields(
 	if (suggestedReactionsChanged) {
 		_suggestedReactions = std::move(suggestedReactions);
 	}
+	if (channelPostsChanged) {
+		_channelPosts = std::move(channelPosts);
+	}
 	if (reactionChanged) {
 		_sentReactionId = reaction;
 	}
@@ -675,7 +808,8 @@ void Story::applyFields(
 	const auto changed = editedChanged
 		|| captionChanged
 		|| mediaChanged
-		|| locationsChanged;
+		|| locationsChanged
+		|| channelPostsChanged;
 	const auto reactionsChanged = reactionChanged
 		|| suggestedReactionsChanged;
 	if (!initial && (changed || reactionsChanged)) {
@@ -695,17 +829,27 @@ void Story::applyFields(
 }
 
 void Story::updateViewsCounts(ViewsCounts &&counts, bool known, bool initial) {
-	const auto viewsChanged = (_views.total != counts.views)
+	const auto total = _views.total
+		? _views.total
+		: (counts.views + counts.forwards);
+	const auto viewsChanged = (_views.total != total)
+		|| (_views.forwards != counts.forwards)
 		|| (_views.reactions != counts.reactions)
 		|| (_recentViewers != counts.viewers);
 	if (_views.reactions != counts.reactions
-		|| _views.total != counts.views
+		|| _views.forwards != counts.forwards
+		|| _views.total != total
 		|| _views.known != known) {
 		_views = StoryViews{
 			.reactions = counts.reactions,
-			.total = counts.views,
+			.forwards = counts.forwards,
+			.views = counts.views,
+			.total = total,
 			.known = known,
 		};
+		if (!_channelReactions.total) {
+			_channelReactions.total = _views.reactions + _views.forwards;
+		}
 	}
 	if (viewsChanged) {
 		_recentViewers = std::move(counts.viewers);
@@ -736,6 +880,30 @@ TimeId Story::lastUpdateTime() const {
 	return _lastUpdateTime;
 }
 
+bool Story::repost() const {
+	return _repostSourcePeer || !_repostSourceName.isEmpty();
+}
+
+bool Story::repostModified() const {
+	return _repostModified;
+}
+
+PeerData *Story::repostSourcePeer() const {
+	return _repostSourcePeer;
+}
+
+QString Story::repostSourceName() const {
+	return _repostSourceName;
+}
+
+StoryId Story::repostSourceId() const {
+	return _repostSourceId;
+}
+
+PeerData *Story::fromPeer() const {
+	return _fromPeer;
+}
+
 StoryPreload::StoryPreload(not_null<Story*> story, Fn<void()> done)
 : _story(story)
 , _done(std::move(done)) {
@@ -757,15 +925,12 @@ not_null<Story*> StoryPreload::story() const {
 }
 
 void StoryPreload::start() {
-	const auto origin = FileOriginStory(
-		_story->peer()->id,
-		_story->id());
 	if (const auto photo = _story->photo()) {
 		_photo = photo->createMediaView();
 		if (_photo->loaded()) {
 			callDone();
 		} else {
-			_photo->automaticLoad(origin, _story->peer());
+			_photo->automaticLoad(_story->fullId(), _story->peer());
 			photo->session().downloaderTaskFinished(
 			) | rpl::filter([=] {
 				return _photo->loaded();

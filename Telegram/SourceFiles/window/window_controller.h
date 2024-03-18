@@ -9,7 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mainwindow.h"
 #include "window/window_adaptive.h"
-#include "ui/layers/layer_widget.h"
 
 namespace Main {
 class Account;
@@ -75,6 +74,7 @@ public:
 
 	[[nodiscard]] Adaptive &adaptive() const;
 
+	void firstShow();
 	void finishFirstShow();
 
 	void setupPasscodeLock();

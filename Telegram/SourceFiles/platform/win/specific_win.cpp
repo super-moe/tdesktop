@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/win/windows_autostart_task.h"
 #include "base/platform/base_platform_info.h"
 #include "base/platform/win/base_windows_co_task_mem.h"
+#include "base/platform/win/base_windows_shlobj_h.h"
 #include "base/platform/win/base_windows_winrt.h"
 #include "base/call_delayed.h"
 #include "ui/boxes/confirm_box.h"
@@ -41,7 +42,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <openssl/err.h>
 
 #include <dbghelp.h>
-#include <shlobj.h>
 #include <Shlwapi.h>
 #include <Strsafe.h>
 #include <Windowsx.h>
@@ -195,8 +195,7 @@ bool ManageAppLink(
 		return true;
 	}
 	const auto shellLink = base::WinRT::TryCreateInstance<IShellLink>(
-		CLSID_ShellLink,
-		CLSCTX_INPROC_SERVER);
+		CLSID_ShellLink);
 	if (!shellLink) {
 		if (!silent) LOG(("App Error: could not create instance of IID_IShellLink %1").arg(hr));
 		return false;

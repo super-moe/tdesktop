@@ -109,10 +109,13 @@ using FilterId = int32;
 
 using MessageIdsList = std::vector<FullMsgId>;
 
-PeerId PeerFromMessage(const MTPmessage &message);
-MTPDmessage::Flags FlagsFromMessage(const MTPmessage &message);
-MsgId IdFromMessage(const MTPmessage &message);
-TimeId DateFromMessage(const MTPmessage &message);
+[[nodiscard]] PeerId PeerFromMessage(const MTPmessage &message);
+[[nodiscard]] MTPDmessage::Flags FlagsFromMessage(
+	const MTPmessage &message);
+[[nodiscard]] MsgId IdFromMessage(const MTPmessage &message);
+[[nodiscard]] TimeId DateFromMessage(const MTPmessage &message);
+[[nodiscard]] BusinessShortcutId BusinessShortcutIdFromMessage(
+	const MTPmessage &message);
 
 [[nodiscard]] inline MTPint MTP_int(MsgId id) noexcept {
 	return MTP_int(id.bare);
@@ -300,8 +303,8 @@ enum class MessageFlag : uint64 {
 	OnlyEmojiAndSpaces    = (1ULL << 35),
 	OnlyEmojiAndSpacesSet = (1ULL << 36),
 
-	// Fake message with bot cover and information.
-	FakeBotAbout          = (1ULL << 37),
+	// Fake message with some info, like bot cover and information.
+	FakeAboutView         = (1ULL << 37),
 
 	StoryItem             = (1ULL << 38),
 
@@ -309,6 +312,14 @@ enum class MessageFlag : uint64 {
 
 	// If not set then we need to refresh _displayFrom value.
 	DisplayFromChecked    = (1ULL << 40),
+
+	ShowSimilarChannels   = (1ULL << 41),
+
+	Sponsored             = (1ULL << 42),
+
+	ReactionsAreTags      = (1ULL << 43),
+
+	ShortcutMessage       = (1ULL << 44),
 };
 inline constexpr bool is_flag_type(MessageFlag) { return true; }
 using MessageFlags = base::flags<MessageFlag>;
@@ -318,6 +329,7 @@ enum class MediaWebPageFlag : uint8 {
 	ForceSmallMedia = (1 << 1),
 	Manual = (1 << 2),
 	Safe = (1 << 3),
+	Sponsored = (1 << 4),
 };
 inline constexpr bool is_flag_type(MediaWebPageFlag) { return true; }
 using MediaWebPageFlags = base::flags<MediaWebPageFlag>;
